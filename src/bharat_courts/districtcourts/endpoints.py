@@ -12,8 +12,77 @@ Court hierarchy (4 levels):
 
 from __future__ import annotations
 
+import re
+
 BASE_URL = "https://services.ecourts.gov.in/ecourtindia_v6"
 CAPTCHA_IMAGE_URL = f"{BASE_URL}/vendor/securimage/securimage_show.php"
+
+# ---------------------------------------------------------------------------
+# Anti-bot "delimeter" header (added by the portal ~2026-07-22)
+# ---------------------------------------------------------------------------
+#
+# Every AJAX POST now has to carry two custom headers, or the server answers
+# with a generic "Oops! ... Invalid Request...!" page for *every* endpoint —
+# including the CAPTCHA-free cascade dropdowns:
+#
+#     delimeter: <rotating secret>
+#     abc: xyz
+#
+# The secret is not in a cookie or the HTML; it is a literal baked into
+# ``js/components.js``, which the portal republishes with a new value every
+# hour or so (the page references it with a ``?v=<epoch>`` cache-buster):
+#
+#     function ajaxCall(jsonobj)
+#     {
+#         var delimeter="73vmgasjxcminndsf846Pq";
+#         ...
+#         headers: {"delimeter": delimeter, "abc": "xyz"},
+#
+# So it cannot be pinned as a constant — it has to be scraped per session and
+# re-scraped when it rotates mid-run. ``abc: xyz`` is a fixed decoy.
+
+#: Fixed companion header. Sent verbatim alongside the rotating secret.
+AJAX_STATIC_HEADERS: dict[str, str] = {"abc": "xyz"}
+
+#: Locates the components.js reference (with its ``?v=`` cache-buster) in the
+#: homepage HTML, so we fetch exactly the build the portal is serving.
+COMPONENTS_JS_RE = re.compile(r"js/components\.js(?:\?v=\d+)?")
+
+#: Extracts the rotating secret from components.js.
+DELIMETER_RE = re.compile(r"""var\s+delimeter\s*=\s*["']([^"']+)["']""")
+
+#: Fallback path when the homepage HTML has no components.js reference.
+COMPONENTS_JS_PATH = "js/components.js"
+
+
+def components_js_url(home_html: str = "") -> str:
+    """Resolve the URL of the portal's ``components.js``.
+
+    Prefers the exact (cache-busted) reference found in ``home_html`` so we
+    read the same build the browser would; falls back to the bare path.
+    """
+    match = COMPONENTS_JS_RE.search(home_html or "")
+    return f"{BASE_URL}/{match.group(0) if match else COMPONENTS_JS_PATH}"
+
+
+def parse_delimeter(js_source: str) -> str:
+    """Extract the rotating ``delimeter`` secret from components.js.
+
+    Returns an empty string if the literal is absent — the caller then sends
+    the request without it, which still yields a clear portal-side error
+    rather than a confusing local exception.
+    """
+    match = DELIMETER_RE.search(js_source)
+    return match.group(1) if match else ""
+
+
+def ajax_headers(delimeter: str) -> dict[str, str]:
+    """Build the anti-bot headers for an AJAX POST."""
+    headers = dict(AJAX_STATIC_HEADERS)
+    if delimeter:
+        headers["delimeter"] = delimeter
+    return headers
+
 
 # State codes for district courts (from portal dropdown)
 DISTRICT_STATES: dict[str, str] = {

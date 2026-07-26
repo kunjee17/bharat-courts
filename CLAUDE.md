@@ -86,6 +86,45 @@ Key details:
 - `{"con":"Invalid Captcha"}` → wrong CAPTCHA text
 - `{"Error":""}` with valid `con` → success
 
+### District Courts portal: the rotating `delimeter` header
+
+Since ~2026-07-22 `services.ecourts.gov.in` gates **every** AJAX POST — including
+the CAPTCHA-free cascade dropdowns — on two custom request headers:
+
+```
+delimeter: <rotating secret>
+abc: xyz
+```
+
+Without them every endpoint returns the same generic
+`{"errormsg": "<strong>Oops!</strong>There is something wrong.....!!!, Invalid Request...!"}`,
+which reads like a portal outage but is really a missing header.
+
+The secret is **not** in a cookie, the HTML, or the `app_token`. It is a literal
+baked into `js/components.js` (`var delimeter="…";` inside `ajaxCall()`), which the
+portal republishes with a new value roughly hourly. So:
+
+1. `_init_session` scrapes it via `endpoints.components_js_url(home_html)` +
+   `endpoints.parse_delimeter(js)` — resolving the exact `?v=<epoch>` build the
+   homepage references.
+2. `_post_ajax` attaches it through `endpoints.ajax_headers()`.
+3. On `InvalidRequestError` the client re-scrapes and replays the request **once**.
+   If the re-scrape yields the *same* secret it re-raises instead — the rejection
+   was about something else, and retrying would just loop.
+
+Gotchas worth keeping in mind:
+
+- **Don't pin the secret as a constant.** It rotates; a hardcoded value works in
+  testing and then silently breaks the whole backend an hour later. (This is how
+  the bug in #14 first looked like an HTTP/2 or IP-blocking issue — a captured
+  value kept working just long enough to mislead.)
+- **Match "Invalid Request" loosely.** The wording already drifted once
+  (`wrong..!!!` → `wrong.....!!!` plus a trailing "go Home Page" link).
+- **A wrong CAPTCHA also arrives via `errormsg`** (`"Invalid Captcha... "`), not via
+  `status: 0`. It must map to `CaptchaError`, or `_post_with_captcha_retry` (which
+  only catches `CaptchaError`) aborts the query on a single bad OCR guess instead
+  of retrying with a fresh session.
+
 ### Archive module (`src/bharat_courts/archive/`)
 
 Opt-in module that mirrors the public AWS Open Data judgment buckets locally.

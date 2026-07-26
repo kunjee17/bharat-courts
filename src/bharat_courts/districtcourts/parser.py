@@ -38,6 +38,30 @@ class ServerError(Exception):
     """Raised on a server-side error response."""
 
 
+class InvalidRequestError(ServerError):
+    """Raised when the portal rejects a request as "Invalid Request".
+
+    Since 2026-07, ``services.ecourts.gov.in`` gates every AJAX POST on a
+    rotating ``delimeter`` header (see
+    :func:`bharat_courts.districtcourts.endpoints.parse_delimeter`). A stale
+    or missing value produces this generic "Oops! ... Invalid Request" page
+    rather than a specific field-level complaint, so it is worth
+    distinguishing: the client re-scrapes the secret and retries once on it.
+    """
+
+
+#: The portal's generic rejection text. Deliberately loose — the message has
+#: already drifted once ("wrong..!!!" → "wrong.....!!!" plus a trailing "go
+#: Home Page" link), so match on the stable phrase only.
+_INVALID_REQUEST_RE = re.compile(r"invalid\s+request", re.IGNORECASE)
+
+#: A wrong CAPTCHA is reported through the same generic ``errormsg`` channel
+#: as real server errors ("Invalid Captcha... "). It must surface as
+#: :class:`CaptchaError` so ``_post_with_captcha_retry`` retries with a fresh
+#: session instead of aborting the whole query on one bad OCR guess.
+_INVALID_CAPTCHA_RE = re.compile(r"invalid\s+captcha", re.IGNORECASE)
+
+
 def _parse_date(text: str) -> date | None:
     """Parse DD-MM-YYYY date string."""
     text = text.strip()
@@ -62,6 +86,15 @@ def _clean_text(text: str | None) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _server_error(errormsg: str) -> Exception:
+    """Build the most specific error class for a portal ``errormsg``."""
+    if _INVALID_CAPTCHA_RE.search(errormsg):
+        return CaptchaError(errormsg)
+    if _INVALID_REQUEST_RE.search(errormsg):
+        return InvalidRequestError(errormsg)
+    return ServerError(errormsg)
+
+
 def parse_ajax_response(raw: str) -> dict:
     """Parse the JSON envelope from an AJAX response.
 
@@ -74,8 +107,10 @@ def parse_ajax_response(raw: str) -> dict:
         Parsed dict with all response fields.
 
     Raises:
-        CaptchaError: If status is 0 (CAPTCHA failed).
-        ServerError: If errormsg is present.
+        CaptchaError: If status is 0, or the errormsg reports a bad CAPTCHA.
+        InvalidRequestError: If the portal returned its generic "Invalid
+            Request" rejection (usually a stale ``delimeter`` header).
+        ServerError: If any other errormsg is present.
     """
     text = raw.strip().lstrip("\ufeff")
 
@@ -84,7 +119,7 @@ def parse_ajax_response(raw: str) -> dict:
         parts = text.split("#####")
         error_msg = parts[0].strip()
         if error_msg:
-            raise ServerError(error_msg)
+            raise _server_error(error_msg)
 
     try:
         data = json.loads(text, strict=False)
@@ -99,7 +134,7 @@ def parse_ajax_response(raw: str) -> dict:
     # Check for errors
     errormsg = data.get("errormsg")
     if errormsg:
-        raise ServerError(errormsg)
+        raise _server_error(errormsg)
 
     # CAPTCHA failure
     status = data.get("status")

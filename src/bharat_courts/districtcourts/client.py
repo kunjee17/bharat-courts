@@ -15,6 +15,11 @@ Flow:
 
 Key difference from HC Services: every AJAX response returns a rotating
 app_token that must be sent with the next request.
+
+Since ~2026-07-22 the portal also gates every AJAX POST on a rotating
+``delimeter`` request header scraped from ``js/components.js`` — without it
+even the CAPTCHA-free dropdowns return "Invalid Request". See
+:func:`bharat_courts.districtcourts.endpoints.parse_delimeter`.
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ from bharat_courts.config import config as default_config
 from bharat_courts.districtcourts import endpoints
 from bharat_courts.districtcourts.parser import (
     CaptchaError,
+    InvalidRequestError,
     parse_ajax_response,
     parse_case_status_html,
     parse_cause_list_html,
@@ -67,6 +73,7 @@ class DistrictCourtClient:
         self._http = http_client or RateLimitedClient(self._config)
         self._owns_http = http_client is None
         self._app_token: str = ""
+        self._delimeter: str = ""
 
     async def __aenter__(self):
         await self._http.__aenter__()
@@ -80,6 +87,30 @@ class DistrictCourtClient:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    async def _refresh_delimeter(self, home_html: str = "") -> str:
+        """Scrape the current anti-bot ``delimeter`` secret from components.js.
+
+        The portal rotates this value roughly hourly, so it is fetched per
+        session and re-fetched whenever a request comes back as
+        :class:`InvalidRequestError`.
+        """
+        url = endpoints.components_js_url(home_html)
+        try:
+            js = await self._http.get_text(url, headers={"Referer": endpoints.BASE_URL + "/"})
+        except Exception as e:  # network blip — keep the old value, let the POST report
+            logger.warning("Could not fetch %s for delimeter: %s", url, e)
+            return self._delimeter
+
+        delimeter = endpoints.parse_delimeter(js)
+        if not delimeter:
+            logger.warning("No 'delimeter' literal found in %s — portal may have changed", url)
+            return self._delimeter
+
+        if delimeter != self._delimeter:
+            logger.debug("delimeter refreshed: %s...", delimeter[:6])
+        self._delimeter = delimeter
+        return delimeter
+
     async def _init_session(self):
         """Load the main page to establish session cookie, then get initial token."""
         # GET the home page to get SERVICES_SESSID cookie
@@ -88,6 +119,10 @@ class DistrictCourtClient:
             headers={"Referer": endpoints.BASE_URL + "/"},
         )
         logger.debug("Session init: status=%d", resp.status_code)
+
+        # Every AJAX POST below is gated on this header; fetch it before the
+        # first one, resolving components.js from the page we just loaded.
+        await self._refresh_delimeter(resp.text)
 
         # Get initial app_token via getCaptcha call
         try:
@@ -103,19 +138,33 @@ class DistrictCourtClient:
         Appends ajax_req=true and app_token to the data, posts to the
         controller/action URL, parses the JSON response, and updates
         the stored app_token from the response.
+
+        Also carries the anti-bot ``delimeter``/``abc`` headers. If the
+        portal rejects the request as "Invalid Request" the secret has
+        almost certainly rotated mid-session, so it is re-scraped and the
+        request replayed once before the error is allowed to propagate.
         """
         url = endpoints.ajax_url(controller_action)
-        post_data = dict(data)
-        post_data["ajax_req"] = "true"
-        post_data["app_token"] = self._app_token
 
-        resp = await self._http.post(
-            url,
-            data=post_data,
-            headers={"Referer": endpoints.BASE_URL + "/"},
-        )
+        async def send() -> dict:
+            post_data = dict(data)
+            post_data["ajax_req"] = "true"
+            post_data["app_token"] = self._app_token
 
-        result = parse_ajax_response(resp.text)
+            headers = {"Referer": endpoints.BASE_URL + "/"}
+            headers.update(endpoints.ajax_headers(self._delimeter))
+
+            resp = await self._http.post(url, data=post_data, headers=headers)
+            return parse_ajax_response(resp.text)
+
+        try:
+            result = await send()
+        except InvalidRequestError:
+            stale = self._delimeter
+            if not await self._refresh_delimeter() or self._delimeter == stale:
+                raise  # not a rotation — the portal is rejecting us for another reason
+            logger.info("Portal rejected request as invalid; delimeter rotated, retrying once")
+            result = await send()
 
         # Rotate token
         new_token = result.get("app_token", "")

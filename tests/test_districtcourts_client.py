@@ -447,3 +447,131 @@ async def test_cause_list_raises_on_unknown_court_no(fast_config, captcha_solver
                     court_no="9^9",
                     civil=True,
                 )
+
+
+# ------------------------------------------------------------------
+# Anti-bot "delimeter" header (portal change ~2026-07-22)
+# ------------------------------------------------------------------
+
+#: Minimal stand-ins for the portal's homepage + components.js.
+_HOME_HTML = '<html><script src="/ecourtindia_v6/js/components.js?v=1784899796"></script></html>'
+
+
+def _components_js(delimeter: str) -> str:
+    return 'function ajaxCall(jsonobj)\n{\n\tvar delimeter="%s";\n}' % delimeter
+
+
+def _mock_session_init_with_delimeter(delimeter: str):
+    """Session init where components.js serves a real rotating secret."""
+    respx.get(url__regex=r".*js/components\.js.*").mock(
+        return_value=Response(200, text=_components_js(delimeter))
+    )
+    respx.get(url__startswith=CAPTCHA_IMAGE_URL).mock(
+        return_value=Response(200, content=b"fake_captcha_image")
+    )
+    respx.get(url__startswith=BASE_URL).mock(return_value=Response(200, text=_HOME_HTML))
+
+
+@pytest.mark.asyncio
+async def test_ajax_posts_carry_scraped_delimeter_headers(fast_config, captcha_solver):
+    """Every AJAX POST must carry the secret scraped from components.js plus
+    the fixed 'abc' companion — without them the portal rejects everything,
+    including the CAPTCHA-free dropdowns."""
+    districts_html = (FIXTURES_DIR / "districtcourts_districts.html").read_text()
+    seen = []
+
+    def _capture(request):
+        seen.append(dict(request.headers))
+        return _ajax_response(dist_list=districts_html)
+
+    with respx.mock:
+        _mock_session_init_with_delimeter("73vmgasjxcminndsf846Pq")
+        respx.post(url__regex=r".*getCaptcha").mock(
+            return_value=_ajax_response(div_captcha="<img>")
+        )
+        respx.post(url__regex=r".*fillDistrict").mock(side_effect=_capture)
+
+        async with DistrictCourtClient(config=fast_config, captcha_solver=captcha_solver) as client:
+            await client.list_districts("8")
+
+    assert seen, "fillDistrict was never called"
+    assert seen[0]["delimeter"] == "73vmgasjxcminndsf846Pq"
+    assert seen[0]["abc"] == "xyz"
+
+
+@pytest.mark.asyncio
+async def test_rotated_delimeter_is_rescraped_and_request_retried(fast_config, captcha_solver):
+    """The secret rotates roughly hourly. If it turns over mid-session the
+    portal answers 'Invalid Request'; the client must re-scrape and replay
+    the request rather than failing the query."""
+    districts_html = (FIXTURES_DIR / "districtcourts_districts.html").read_text()
+    invalid = Response(
+        200,
+        text=json.dumps(
+            {
+                "errormsg": "<strong>Oops!</strong>There is something wrong.....!!!, "
+                "Invalid Request...!Try once again",
+                "app_token": "",
+            }
+        ),
+    )
+    attempts = []
+
+    def _fill_district(request):
+        attempts.append(request.headers.get("delimeter"))
+        # Only the freshly-rotated secret is accepted.
+        if request.headers.get("delimeter") == "NEWSECRET":
+            return _ajax_response(dist_list=districts_html)
+        return invalid
+
+    with respx.mock:
+        respx.get(url__startswith=CAPTCHA_IMAGE_URL).mock(
+            return_value=Response(200, content=b"fake_captcha_image")
+        )
+        # components.js serves the stale value first, then rotates.
+        respx.get(url__regex=r".*js/components\.js.*").mock(
+            side_effect=[
+                Response(200, text=_components_js("STALESECRET")),
+                Response(200, text=_components_js("NEWSECRET")),
+            ]
+        )
+        respx.get(url__startswith=BASE_URL).mock(return_value=Response(200, text=_HOME_HTML))
+        respx.post(url__regex=r".*getCaptcha").mock(
+            return_value=_ajax_response(div_captcha="<img>")
+        )
+        respx.post(url__regex=r".*fillDistrict").mock(side_effect=_fill_district)
+
+        async with DistrictCourtClient(config=fast_config, captcha_solver=captcha_solver) as client:
+            districts = await client.list_districts("8")
+
+    assert attempts == ["STALESECRET", "NEWSECRET"], attempts
+    assert districts["1"] == "Patna"
+
+
+@pytest.mark.asyncio
+async def test_invalid_request_not_retried_when_delimeter_unchanged(fast_config, captcha_solver):
+    """If re-scraping yields the same secret the rejection is about something
+    else — surface it instead of silently replaying the request forever."""
+    from bharat_courts.districtcourts.parser import InvalidRequestError
+
+    invalid = Response(
+        200, text=json.dumps({"errormsg": "Invalid Request...!Try once again", "app_token": ""})
+    )
+    calls = []
+
+    def _fill_district(request):
+        calls.append(1)
+        return invalid
+
+    with respx.mock:
+        _mock_session_init_with_delimeter("SAMESECRET")
+        respx.post(url__regex=r".*getCaptcha").mock(
+            return_value=_ajax_response(div_captcha="<img>")
+        )
+        respx.post(url__regex=r".*fillDistrict").mock(side_effect=_fill_district)
+
+        async with DistrictCourtClient(config=fast_config, captcha_solver=captcha_solver) as client:
+            with pytest.raises(InvalidRequestError):
+                await client.list_districts("8")
+
+    assert len(calls) == 1, "should not retry when the secret did not rotate"

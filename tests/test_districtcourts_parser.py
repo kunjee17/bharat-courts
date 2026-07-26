@@ -5,8 +5,14 @@ from pathlib import Path
 
 import pytest
 
+from bharat_courts.districtcourts.endpoints import (
+    ajax_headers,
+    components_js_url,
+    parse_delimeter,
+)
 from bharat_courts.districtcourts.parser import (
     CaptchaError,
+    InvalidRequestError,
     ServerError,
     parse_ajax_response,
     parse_case_status_html,
@@ -40,6 +46,42 @@ def test_parse_ajax_response_captcha_error():
 
 def test_parse_ajax_response_server_error():
     raw = '{"status": 1, "errormsg": "Session expired"}'
+    with pytest.raises(ServerError):
+        parse_ajax_response(raw)
+
+
+def test_parse_ajax_response_invalid_request_is_distinguishable():
+    """A stale anti-bot 'delimeter' header yields the portal's generic
+    rejection. It must be its own type so the client can re-scrape + retry
+    instead of surfacing it as an unrecoverable server error."""
+    raw = (
+        '{"errormsg": "<strong>Oops!</strong>There is something wrong.....!!!, '
+        "Invalid Request...!Try once again <br/><a href='/ecourtindia_v6'>"
+        'Click here to go Home Page</a>", "app_token": ""}'
+    )
+    with pytest.raises(InvalidRequestError):
+        parse_ajax_response(raw)
+
+
+def test_parse_ajax_response_invalid_request_older_wording():
+    """The message already drifted once; match the stable phrase, not the dots."""
+    raw = '{"errormsg": "There is something wrong..!!!, Invalid Request...!Try once again"}'
+    with pytest.raises(InvalidRequestError):
+        parse_ajax_response(raw)
+
+
+def test_parse_ajax_response_bad_captcha_in_errormsg_is_captcha_error():
+    """The portal reports a wrong CAPTCHA through the generic errormsg channel.
+    It must surface as CaptchaError so the retry loop gets a fresh session
+    rather than aborting the query on one bad OCR guess."""
+    raw = '{"status": 1, "errormsg": "Invalid Captcha... ", "app_token": "t"}'
+    with pytest.raises(CaptchaError):
+        parse_ajax_response(raw)
+
+
+def test_invalid_request_still_caught_as_server_error():
+    """Existing callers that catch ServerError keep working."""
+    raw = '{"errormsg": "Invalid Request...!Try once again"}'
     with pytest.raises(ServerError):
         parse_ajax_response(raw)
 
@@ -243,3 +285,43 @@ def test_parse_cause_list_html():
 def test_parse_cause_list_html_empty():
     result = parse_cause_list_html("<div>No cause list</div>")
     assert result == []
+
+
+# ------------------------------------------------------------------
+# Anti-bot "delimeter" scraping (portal change ~2026-07-22)
+# ------------------------------------------------------------------
+
+
+def test_parse_delimeter_extracts_rotating_secret():
+    js = 'function ajaxCall(jsonobj)\n{\n\tvar delimeter="73vmgasjxcminndsf846Pq";\t\n'
+    assert parse_delimeter(js) == "73vmgasjxcminndsf846Pq"
+
+
+def test_parse_delimeter_accepts_single_quotes():
+    assert parse_delimeter("var delimeter = 'abc123';") == "abc123"
+
+
+def test_parse_delimeter_missing_returns_empty():
+    """Absent literal must not raise — the POST then fails portal-side with a
+    clear message instead of a confusing local exception."""
+    assert parse_delimeter("var somethingElse = 1;") == ""
+
+
+def test_components_js_url_prefers_cache_busted_reference():
+    """Read the exact build the portal is serving, matching what a browser
+    would load, rather than a bare path that may be cached differently."""
+    html = '<script src="/ecourtindia_v6/js/components.js?v=1784899796"></script>'
+    assert components_js_url(html).endswith("/js/components.js?v=1784899796")
+
+
+def test_components_js_url_falls_back_to_bare_path():
+    assert components_js_url("<html></html>").endswith("/js/components.js")
+
+
+def test_ajax_headers_include_static_companion():
+    assert ajax_headers("SECRET") == {"abc": "xyz", "delimeter": "SECRET"}
+
+
+def test_ajax_headers_omit_empty_delimeter():
+    """Send no header at all rather than an empty one we know is wrong."""
+    assert ajax_headers("") == {"abc": "xyz"}
