@@ -8,6 +8,7 @@ import pytest
 from bharat_courts.districtcourts.endpoints import (
     ajax_headers,
     components_js_url,
+    parse_ajax_header_spec,
     parse_delimeter,
 )
 from bharat_courts.districtcourts.parser import (
@@ -318,10 +319,75 @@ def test_components_js_url_falls_back_to_bare_path():
     assert components_js_url("<html></html>").endswith("/js/components.js")
 
 
-def test_ajax_headers_include_static_companion():
-    assert ajax_headers("SECRET") == {"abc": "xyz", "delimeter": "SECRET"}
+def test_ajax_headers_default_to_last_known_good_pair():
+    """With no scraped spec, fall back to the pair the portal wanted as of
+    2026-08-04 — both headers carry the same secret."""
+    assert ajax_headers("SECRET") == {"delimeter": "SECRET", "Xgy786trbsd7y": "SECRET"}
 
 
 def test_ajax_headers_omit_empty_delimeter():
     """Send no header at all rather than an empty one we know is wrong."""
-    assert ajax_headers("") == {"abc": "xyz"}
+    assert ajax_headers("") == {}
+
+
+def test_ajax_headers_follow_scraped_spec():
+    spec = {"delimeter": None, "somethingNew": None, "static": "xyz"}
+    assert ajax_headers("SECRET", spec) == {
+        "delimeter": "SECRET",
+        "somethingNew": "SECRET",
+        "static": "xyz",
+    }
+
+
+def test_ajax_headers_empty_spec_falls_back():
+    """An unparseable components.js must not silently strip all headers."""
+    assert ajax_headers("SECRET", {}) == {"delimeter": "SECRET", "Xgy786trbsd7y": "SECRET"}
+
+
+# ------------------------------------------------------------------
+# Anti-bot header-name scraping (portal change 2026-08-04, #17)
+# ------------------------------------------------------------------
+
+
+def test_parse_ajax_header_spec_reads_current_portal_shape():
+    """Verbatim from the live components.js on 2026-08-04: the old fixed
+    'abc: xyz' decoy is gone, replaced by a second header carrying the same
+    rotating secret."""
+    js = """
+    function ajaxCall(jsonobj)
+    {
+        var delimeter="b64ttds7eew4";
+        $.ajax({
+            type: "POST",
+            headers: {
+        "delimeter": delimeter,
+                "Xgy786trbsd7y":delimeter
+            },
+        });
+    }
+    """
+    assert parse_ajax_header_spec(js) == {"delimeter": None, "Xgy786trbsd7y": None}
+
+
+def test_parse_ajax_header_spec_reads_previous_portal_shape():
+    """The pre-2026-08-04 shape (fixed decoy) must still parse, so a rollback
+    on the portal side doesn't break us again."""
+    js = 'var delimeter="x";\nheaders: {"delimeter": delimeter, "abc": "xyz"},'
+    assert parse_ajax_header_spec(js) == {"delimeter": None, "abc": "xyz"}
+
+
+def test_parse_ajax_header_spec_skips_blocks_without_the_secret():
+    """components.js may hold unrelated ajax calls; only the block carrying the
+    rotating secret is the anti-bot one."""
+    js = 'headers: {"Accept": "application/json"},\nheaders: {"delimeter": delimeter},'
+    assert parse_ajax_header_spec(js) == {"delimeter": None}
+
+
+def test_parse_ajax_header_spec_ignores_unresolvable_identifiers():
+    js = 'headers: {"delimeter": delimeter, "other": someUnknownVar},'
+    assert parse_ajax_header_spec(js) == {"delimeter": None}
+
+
+def test_parse_ajax_header_spec_missing_returns_empty():
+    """Absent block must not raise — the caller falls back to known-good names."""
+    assert parse_ajax_header_spec("var somethingElse = 1;") == {}

@@ -16,10 +16,11 @@ Flow:
 Key difference from HC Services: every AJAX response returns a rotating
 app_token that must be sent with the next request.
 
-Since ~2026-07-22 the portal also gates every AJAX POST on a rotating
-``delimeter`` request header scraped from ``js/components.js`` — without it
-even the CAPTCHA-free dropdowns return "Invalid Request". See
-:func:`bharat_courts.districtcourts.endpoints.parse_delimeter`.
+Since ~2026-07-22 the portal also gates every AJAX POST on anti-bot request
+headers scraped from ``js/components.js`` — without them even the CAPTCHA-free
+dropdowns return "Invalid Request". Both the secret and the header names
+rotate. See :func:`bharat_courts.districtcourts.endpoints.parse_delimeter` and
+:func:`bharat_courts.districtcourts.endpoints.parse_ajax_header_spec`.
 """
 
 from __future__ import annotations
@@ -74,6 +75,7 @@ class DistrictCourtClient:
         self._owns_http = http_client is None
         self._app_token: str = ""
         self._delimeter: str = ""
+        self._header_spec: dict[str, str | None] = {}
 
     async def __aenter__(self):
         await self._http.__aenter__()
@@ -87,12 +89,21 @@ class DistrictCourtClient:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    async def _refresh_delimeter(self, home_html: str = "") -> str:
-        """Scrape the current anti-bot ``delimeter`` secret from components.js.
+    def _anti_bot_state(self) -> tuple:
+        """Snapshot of everything the anti-bot headers derive from.
 
-        The portal rotates this value roughly hourly, so it is fetched per
-        session and re-fetched whenever a request comes back as
-        :class:`InvalidRequestError`.
+        Both the secret *and* the header names rotate, so a re-scrape counts as
+        progress if either changed.
+        """
+        return (self._delimeter, tuple(sorted(self._header_spec.items(), key=lambda kv: kv[0])))
+
+    async def _refresh_anti_bot(self, home_html: str = "") -> str:
+        """Scrape the current anti-bot headers from components.js.
+
+        Picks up both the rotating ``delimeter`` secret and the header names
+        that carry it. The portal rotates the secret roughly hourly (and has
+        renamed the headers at least once), so this is fetched per session and
+        re-fetched whenever a request comes back as :class:`InvalidRequestError`.
         """
         url = endpoints.components_js_url(home_html)
         try:
@@ -100,6 +111,14 @@ class DistrictCourtClient:
         except Exception as e:  # network blip — keep the old value, let the POST report
             logger.warning("Could not fetch %s for delimeter: %s", url, e)
             return self._delimeter
+
+        spec = endpoints.parse_ajax_header_spec(js)
+        if spec:
+            if spec != self._header_spec:
+                logger.debug("anti-bot header names refreshed: %s", sorted(spec))
+            self._header_spec = spec
+        else:
+            logger.warning("No anti-bot headers block found in %s — using fallback names", url)
 
         delimeter = endpoints.parse_delimeter(js)
         if not delimeter:
@@ -120,9 +139,9 @@ class DistrictCourtClient:
         )
         logger.debug("Session init: status=%d", resp.status_code)
 
-        # Every AJAX POST below is gated on this header; fetch it before the
-        # first one, resolving components.js from the page we just loaded.
-        await self._refresh_delimeter(resp.text)
+        # Every AJAX POST below is gated on these headers; fetch them before
+        # the first one, resolving components.js from the page we just loaded.
+        await self._refresh_anti_bot(resp.text)
 
         # Get initial app_token via getCaptcha call
         try:
@@ -139,9 +158,9 @@ class DistrictCourtClient:
         controller/action URL, parses the JSON response, and updates
         the stored app_token from the response.
 
-        Also carries the anti-bot ``delimeter``/``abc`` headers. If the
-        portal rejects the request as "Invalid Request" the secret has
-        almost certainly rotated mid-session, so it is re-scraped and the
+        Also carries the scraped anti-bot headers. If the portal rejects the
+        request as "Invalid Request" the secret (or the header names) has
+        almost certainly rotated mid-session, so they are re-scraped and the
         request replayed once before the error is allowed to propagate.
         """
         url = endpoints.ajax_url(controller_action)
@@ -152,7 +171,7 @@ class DistrictCourtClient:
             post_data["app_token"] = self._app_token
 
             headers = {"Referer": endpoints.BASE_URL + "/"}
-            headers.update(endpoints.ajax_headers(self._delimeter))
+            headers.update(endpoints.ajax_headers(self._delimeter, self._header_spec))
 
             resp = await self._http.post(url, data=post_data, headers=headers)
             return parse_ajax_response(resp.text)
@@ -160,10 +179,11 @@ class DistrictCourtClient:
         try:
             result = await send()
         except InvalidRequestError:
-            stale = self._delimeter
-            if not await self._refresh_delimeter() or self._delimeter == stale:
+            stale = self._anti_bot_state()
+            await self._refresh_anti_bot()
+            if not self._delimeter or self._anti_bot_state() == stale:
                 raise  # not a rotation — the portal is rejecting us for another reason
-            logger.info("Portal rejected request as invalid; delimeter rotated, retrying once")
+            logger.info("Portal rejected request as invalid; anti-bot headers rotated, retrying")
             result = await send()
 
         # Rotate token

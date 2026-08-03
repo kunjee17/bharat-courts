@@ -457,8 +457,19 @@ async def test_cause_list_raises_on_unknown_court_no(fast_config, captcha_solver
 _HOME_HTML = '<html><script src="/ecourtindia_v6/js/components.js?v=1784899796"></script></html>'
 
 
-def _components_js(delimeter: str) -> str:
-    return 'function ajaxCall(jsonobj)\n{\n\tvar delimeter="%s";\n}' % delimeter
+def _components_js(delimeter: str, companion: str = "Xgy786trbsd7y") -> str:
+    """Stand-in for the portal's components.js, in its current shape: the
+    secret plus a headers block naming which headers carry it."""
+    return (
+        "function ajaxCall(jsonobj)\n{\n"
+        f'\tvar delimeter="{delimeter}";\n'
+        "\t$.ajax({\n"
+        "\t\theaders: {\n"
+        '\t\t\t"delimeter": delimeter,\n'
+        f'\t\t\t"{companion}":delimeter\n'
+        "\t\t},\n"
+        "\t});\n}"
+    )
 
 
 def _mock_session_init_with_delimeter(delimeter: str):
@@ -474,9 +485,9 @@ def _mock_session_init_with_delimeter(delimeter: str):
 
 @pytest.mark.asyncio
 async def test_ajax_posts_carry_scraped_delimeter_headers(fast_config, captcha_solver):
-    """Every AJAX POST must carry the secret scraped from components.js plus
-    the fixed 'abc' companion — without them the portal rejects everything,
-    including the CAPTCHA-free dropdowns."""
+    """Every AJAX POST must carry the secret scraped from components.js under
+    *every* header name that block names — without them the portal rejects
+    everything, including the CAPTCHA-free dropdowns."""
     districts_html = (FIXTURES_DIR / "districtcourts_districts.html").read_text()
     seen = []
 
@@ -496,7 +507,8 @@ async def test_ajax_posts_carry_scraped_delimeter_headers(fast_config, captcha_s
 
     assert seen, "fillDistrict was never called"
     assert seen[0]["delimeter"] == "73vmgasjxcminndsf846Pq"
-    assert seen[0]["abc"] == "xyz"
+    assert seen[0]["xgy786trbsd7y"] == "73vmgasjxcminndsf846Pq"
+    assert "abc" not in seen[0], "the pre-2026-08-04 decoy must no longer be sent"
 
 
 @pytest.mark.asyncio
@@ -545,6 +557,56 @@ async def test_rotated_delimeter_is_rescraped_and_request_retried(fast_config, c
             districts = await client.list_districts("8")
 
     assert attempts == ["STALESECRET", "NEWSECRET"], attempts
+    assert districts["1"] == "Patna"
+
+
+@pytest.mark.asyncio
+async def test_renamed_companion_header_is_rescraped_and_request_retried(
+    fast_config, captcha_solver
+):
+    """Regression for #17: the portal renames the companion header, not just
+    the secret. A rejection must re-scrape the *names* too, otherwise the whole
+    backend stays broken until someone edits a constant."""
+    districts_html = (FIXTURES_DIR / "districtcourts_districts.html").read_text()
+    invalid = Response(
+        200,
+        text=json.dumps(
+            {
+                "errormsg": "<strong>Oops!</strong>There is something wrong..!!!, "
+                "Invalid Request...!! Try once again",
+                "app_token": "",
+            }
+        ),
+    )
+    attempts = []
+
+    def _fill_district(request):
+        attempts.append(sorted(h for h in request.headers if h.startswith(("delimeter", "x"))))
+        # The secret never changes here — only the header carrying it does.
+        if request.headers.get("brandNewName") == "SAMESECRET":
+            return _ajax_response(dist_list=districts_html)
+        return invalid
+
+    with respx.mock:
+        respx.get(url__startswith=CAPTCHA_IMAGE_URL).mock(
+            return_value=Response(200, content=b"fake_captcha_image")
+        )
+        respx.get(url__regex=r".*js/components\.js.*").mock(
+            side_effect=[
+                Response(200, text=_components_js("SAMESECRET", companion="oldName")),
+                Response(200, text=_components_js("SAMESECRET", companion="brandNewName")),
+            ]
+        )
+        respx.get(url__startswith=BASE_URL).mock(return_value=Response(200, text=_HOME_HTML))
+        respx.post(url__regex=r".*getCaptcha").mock(
+            return_value=_ajax_response(div_captcha="<img>")
+        )
+        respx.post(url__regex=r".*fillDistrict").mock(side_effect=_fill_district)
+
+        async with DistrictCourtClient(config=fast_config, captcha_solver=captcha_solver) as client:
+            districts = await client.list_districts("8")
+
+    assert len(attempts) == 2, attempts
     assert districts["1"] == "Patna"
 
 

@@ -86,31 +86,34 @@ Key details:
 - `{"con":"Invalid Captcha"}` → wrong CAPTCHA text
 - `{"Error":""}` with valid `con` → success
 
-### District Courts portal: the rotating `delimeter` header
+### District Courts portal: the rotating anti-bot headers
 
 Since ~2026-07-22 `services.ecourts.gov.in` gates **every** AJAX POST — including
-the CAPTCHA-free cascade dropdowns — on two custom request headers:
+the CAPTCHA-free cascade dropdowns — on custom request headers that carry a
+rotating secret. As of 2026-08-04 the portal wants:
 
 ```
-delimeter: <rotating secret>
-abc: xyz
+delimeter:     <rotating secret>
+Xgy786trbsd7y: <the same rotating secret>
 ```
 
 Without them every endpoint returns the same generic
-`{"errormsg": "<strong>Oops!</strong>There is something wrong.....!!!, Invalid Request...!"}`,
+`{"errormsg": "<strong>Oops!</strong>There is something wrong..!!!, Invalid Request...!"}`,
 which reads like a portal outage but is really a missing header.
 
-The secret is **not** in a cookie, the HTML, or the `app_token`. It is a literal
-baked into `js/components.js` (`var delimeter="…";` inside `ajaxCall()`), which the
-portal republishes with a new value roughly hourly. So:
+Neither the secret nor the header names are in a cookie, the HTML, or the
+`app_token`. Both live in `js/components.js` inside `ajaxCall()` — `var
+delimeter="…";` plus the `headers: { … }` object literal naming which headers
+carry it — which the portal republishes roughly hourly. So:
 
-1. `_init_session` scrapes it via `endpoints.components_js_url(home_html)` +
-   `endpoints.parse_delimeter(js)` — resolving the exact `?v=<epoch>` build the
-   homepage references.
-2. `_post_ajax` attaches it through `endpoints.ajax_headers()`.
+1. `_init_session` scrapes both via `endpoints.components_js_url(home_html)` +
+   `endpoints.parse_delimeter(js)` + `endpoints.parse_ajax_header_spec(js)` —
+   resolving the exact `?v=<epoch>` build the homepage references.
+2. `_post_ajax` attaches them through `endpoints.ajax_headers(secret, spec)`.
 3. On `InvalidRequestError` the client re-scrapes and replays the request **once**.
-   If the re-scrape yields the *same* secret it re-raises instead — the rejection
-   was about something else, and retrying would just loop.
+   If the re-scrape yields the *same* secret *and* the same header names it
+   re-raises instead — the rejection was about something else, and retrying
+   would just loop.
 
 Gotchas worth keeping in mind:
 
@@ -118,8 +121,16 @@ Gotchas worth keeping in mind:
   testing and then silently breaks the whole backend an hour later. (This is how
   the bug in #14 first looked like an HTTP/2 or IP-blocking issue — a captured
   value kept working just long enough to mislead.)
-- **Match "Invalid Request" loosely.** The wording already drifted once
-  (`wrong..!!!` → `wrong.....!!!` plus a trailing "go Home Page" link).
+- **Don't pin the header *names* either.** They rotate too, on a much slower
+  clock — which makes them more dangerous, because they look like constants.
+  The original `abc: xyz` decoy was replaced wholesale by `Xgy786trbsd7y` on
+  2026-08-04 and took the backend down for ~5 days (#17). `parse_ajax_header_spec`
+  reproduces whatever the `headers:` block names; `AJAX_HEADER_FALLBACK` is only
+  a last resort when that block can't be parsed. If you find yourself editing
+  `AJAX_HEADER_FALLBACK` to fix a breakage, the scrape is what actually broke.
+- **Match "Invalid Request" loosely.** The wording has drifted twice
+  (`wrong..!!!` → `wrong.....!!!` → back to `wrong..!!!`, plus a trailing
+  "go Home Page" link).
 - **A wrong CAPTCHA also arrives via `errormsg`** (`"Invalid Captcha... "`), not via
   `status: 0`. It must map to `CaptchaError`, or `_post_with_captcha_retry` (which
   only catches `CaptchaError`) aborts the query on a single bad OCR guess instead

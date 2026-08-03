@@ -21,12 +21,9 @@ CAPTCHA_IMAGE_URL = f"{BASE_URL}/vendor/securimage/securimage_show.php"
 # Anti-bot "delimeter" header (added by the portal ~2026-07-22)
 # ---------------------------------------------------------------------------
 #
-# Every AJAX POST now has to carry two custom headers, or the server answers
-# with a generic "Oops! ... Invalid Request...!" page for *every* endpoint —
-# including the CAPTCHA-free cascade dropdowns:
-#
-#     delimeter: <rotating secret>
-#     abc: xyz
+# Every AJAX POST now has to carry a couple of custom headers, or the server
+# answers with a generic "Oops! ... Invalid Request...!" page for *every*
+# endpoint — including the CAPTCHA-free cascade dropdowns.
 #
 # The secret is not in a cookie or the HTML; it is a literal baked into
 # ``js/components.js``, which the portal republishes with a new value every
@@ -34,15 +31,39 @@ CAPTCHA_IMAGE_URL = f"{BASE_URL}/vendor/securimage/securimage_show.php"
 #
 #     function ajaxCall(jsonobj)
 #     {
-#         var delimeter="73vmgasjxcminndsf846Pq";
+#         var delimeter="b64ttds7eew4";
 #         ...
-#         headers: {"delimeter": delimeter, "abc": "xyz"},
+#         headers: {
+#             "delimeter": delimeter,
+#             "Xgy786trbsd7y": delimeter
+#         },
 #
 # So it cannot be pinned as a constant — it has to be scraped per session and
-# re-scraped when it rotates mid-run. ``abc: xyz`` is a fixed decoy.
+# re-scraped when it rotates mid-run.
+#
+# The *header names* rotate too, not just the secret value: the original pair
+# was ``delimeter`` + a fixed ``abc: xyz`` decoy, and on 2026-08-04 the decoy
+# was replaced by ``Xgy786trbsd7y`` carrying the same secret. Pinning the names
+# broke the whole backend exactly the way pinning the value would have (#17).
+# So we scrape the ``headers:`` block itself and reproduce whatever it sends,
+# falling back to the last-known-good pair if the block can't be parsed.
 
-#: Fixed companion header. Sent verbatim alongside the rotating secret.
-AJAX_STATIC_HEADERS: dict[str, str] = {"abc": "xyz"}
+#: Name of the JS variable holding the rotating secret.
+DELIMETER_VAR = "delimeter"
+
+#: Last-known-good header spec, used when the ``headers:`` block can't be
+#: parsed. ``None`` means "send the rotating secret as this header's value".
+AJAX_HEADER_FALLBACK: dict[str, str | None] = {DELIMETER_VAR: None, "Xgy786trbsd7y": None}
+
+#: Locates a ``headers: { ... }`` object literal. Header objects never nest, so
+#: ``[^{}]*`` keeps this anchored to a single block.
+AJAX_HEADERS_BLOCK_RE = re.compile(r"headers\s*:\s*\{([^{}]*)\}")
+
+#: One ``"name": value`` entry, where value is a quoted literal or a bare
+#: identifier (the ``delimeter`` variable).
+AJAX_HEADER_ENTRY_RE = re.compile(
+    r"""["']([A-Za-z0-9_-]+)["']\s*:\s*(?:["']([^"']*)["']|([A-Za-z_$][\w$]*))"""
+)
 
 #: Locates the components.js reference (with its ``?v=`` cache-buster) in the
 #: homepage HTML, so we fetch exactly the build the portal is serving.
@@ -76,11 +97,43 @@ def parse_delimeter(js_source: str) -> str:
     return match.group(1) if match else ""
 
 
-def ajax_headers(delimeter: str) -> dict[str, str]:
-    """Build the anti-bot headers for an AJAX POST."""
-    headers = dict(AJAX_STATIC_HEADERS)
-    if delimeter:
-        headers["delimeter"] = delimeter
+def parse_ajax_header_spec(js_source: str) -> dict[str, str | None]:
+    """Extract the anti-bot request headers ``ajaxCall()`` sends.
+
+    Returns a mapping of header name -> literal value, where ``None`` means
+    "substitute the rotating secret". Returns an empty dict when no headers
+    block referencing the secret is found, so the caller can fall back to
+    :data:`AJAX_HEADER_FALLBACK` rather than silently sending nothing.
+    """
+    for block in AJAX_HEADERS_BLOCK_RE.findall(js_source):
+        spec: dict[str, str | None] = {}
+        for name, literal, identifier in AJAX_HEADER_ENTRY_RE.findall(block):
+            if not identifier:
+                spec[name] = literal
+            elif identifier == DELIMETER_VAR:
+                spec[name] = None
+            # any other identifier is a value we can't resolve — skip it
+        # The anti-bot block is the one that carries the secret; other ajax
+        # calls in the file may have their own unrelated headers.
+        if any(value is None for value in spec.values()):
+            return spec
+    return {}
+
+
+def ajax_headers(delimeter: str, spec: dict[str, str | None] | None = None) -> dict[str, str]:
+    """Build the anti-bot headers for an AJAX POST.
+
+    Args:
+        delimeter: The rotating secret scraped from components.js.
+        spec: Header spec from :func:`parse_ajax_header_spec`. Falls back to
+            :data:`AJAX_HEADER_FALLBACK` when empty or omitted.
+    """
+    headers: dict[str, str] = {}
+    for name, literal in (spec or AJAX_HEADER_FALLBACK).items():
+        if literal is not None:
+            headers[name] = literal
+        elif delimeter:
+            headers[name] = delimeter
     return headers
 
 
