@@ -209,6 +209,8 @@ class CauseListEntry(_Serializable):
     judge: str = ""
     listing_date: date | None = None
     item_number: str = ""
+    cnr_number: str = ""  # present on advocate cause lists, absent on PDFs
+    purpose: str = ""  # e.g. "182-FOR FINAL HEARING"
 
 
 @dataclass

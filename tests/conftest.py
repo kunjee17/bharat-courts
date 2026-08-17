@@ -67,3 +67,13 @@ def districtcourts_districts_html():
 @pytest.fixture
 def districtcourts_complexes_html():
     return (FIXTURES_DIR / "districtcourts_complexes.html").read_text()
+
+
+@pytest.fixture
+def hcservices_advocate_search_json():
+    return (FIXTURES_DIR / "hcservices_advocate_search.json").read_text()
+
+
+@pytest.fixture
+def hcservices_advocate_cause_list_json():
+    return (FIXTURES_DIR / "hcservices_advocate_cause_list.json").read_text()
