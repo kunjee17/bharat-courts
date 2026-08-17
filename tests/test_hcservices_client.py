@@ -103,3 +103,31 @@ def test_advocate_cause_list_form():
     assert form["f"] == "date_case_list"
     assert form["caselist_date_dmy"] == "17-08-2026"
     assert form["adv_bar_state"] == "G/504/2011"
+
+
+# ------------------------------------------------------------------
+# CNR lookup
+# ------------------------------------------------------------------
+
+
+def test_cnr_form():
+    form = endpoints.case_status_by_cnr_form(cnr="GJHC240464312025", captcha="abc123")
+    assert form["cino"] == "GJHC240464312025"
+    assert form["action_code"] == "fetchStateDistCourtNew"
+    # without this the server answers ERROR_caseStatusSearchTypeBlank
+    assert form["caseStatusSearchType"] == "CNRNumber"
+    assert form["appFlag"] == "web"
+
+
+def test_cnr_form_normalises_case():
+    form = endpoints.case_status_by_cnr_form(cnr=" gjhc240464312025 ", captcha="x")
+    assert form["cino"] == "GJHC240464312025"
+
+
+@pytest.mark.parametrize(
+    "bad", ["", "TOO-SHORT", "GJHC24046431202", "GJHC2404643120255", "GJHC2404643120!5"]
+)
+async def test_cnr_lookup_rejects_malformed(bad):
+    client = HCServicesClient()
+    with pytest.raises(ValueError, match="16 alphanumeric"):
+        await client.case_status_by_cnr(bad)

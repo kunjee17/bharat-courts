@@ -15,9 +15,11 @@ Flow:
 from __future__ import annotations
 
 import logging
+import re
 
 from bharat_courts.captcha import default_solver
 from bharat_courts.captcha.base import CaptchaSolver
+from bharat_courts.casedetail import parse_case_detail
 from bharat_courts.config import BharatCourtsConfig
 from bharat_courts.config import config as default_config
 from bharat_courts.hcservices import endpoints
@@ -29,7 +31,14 @@ from bharat_courts.hcservices.parser import (
     parse_orders,
 )
 from bharat_courts.http import RateLimitedClient
-from bharat_courts.models import CaseInfo, CaseOrder, CauseListEntry, CauseListPDF, Court
+from bharat_courts.models import (
+    CaseDetail,
+    CaseInfo,
+    CaseOrder,
+    CauseListEntry,
+    CauseListPDF,
+    Court,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -298,6 +307,37 @@ class HCServicesClient:
 
         resp = await self._post_with_captcha_retry(endpoints.SHOW_RECORDS_URL, build_form)
         return parse_advocate_cause_list(resp.text)
+
+    async def case_status_by_cnr(self, cnr: str) -> CaseDetail:
+        """Look up a case by its CNR number.
+
+        This returns considerably more than :meth:`case_status`: the search
+        endpoints answer with identity only, leaving ``status`` and
+        ``next_hearing_date`` empty, whereas a CNR lookup returns the whole
+        case page — stage, coram, every party with advocates, the acts, the
+        full hearing history and the orders — in a single request.
+
+        Args:
+            cnr: 16-character CNR, e.g. "GJHC240464312025". Hyphens and
+                spaces are stripped.
+
+        Returns:
+            A CaseDetail. Sections the case does not have (no orders yet, no
+            acts recorded) come back empty rather than raising.
+
+        Raises:
+            ValueError: If the CNR is not 16 alphanumeric characters.
+            CaptchaError: If every CAPTCHA attempt failed.
+        """
+        cleaned = re.sub(r"[\s-]", "", cnr).upper()
+        if len(cleaned) != 16 or not cleaned.isalnum():
+            raise ValueError(f"CNR must be 16 alphanumeric characters, got {cnr!r}")
+
+        def build_form(captcha: str) -> dict:
+            return endpoints.case_status_by_cnr_form(cnr=cleaned, captcha=captcha)
+
+        resp = await self._post_with_captcha_retry(endpoints.INDEX_QRY_URL, build_form)
+        return parse_case_detail(resp.text, cnr=cleaned, base_url=endpoints.BASE_URL)
 
     async def court_orders(
         self,

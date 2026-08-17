@@ -77,3 +77,13 @@ def hcservices_advocate_search_json():
 @pytest.fixture
 def hcservices_advocate_cause_list_json():
     return (FIXTURES_DIR / "hcservices_advocate_cause_list.json").read_text()
+
+
+@pytest.fixture
+def hcservices_case_detail_html():
+    return (FIXTURES_DIR / "hcservices_case_detail.html").read_text()
+
+
+@pytest.fixture
+def districtcourts_case_detail_html():
+    return (FIXTURES_DIR / "districtcourts_case_detail.html").read_text()

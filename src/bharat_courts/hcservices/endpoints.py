@@ -214,6 +214,30 @@ def advocate_cause_list_form(
     }
 
 
+def case_status_by_cnr_form(*, cnr: str, captcha: str) -> dict[str, str]:
+    """Build form data for a CNR lookup.
+
+    Derived from the portal's ``funViewCinoHistory()``. Unlike every other
+    search this takes no state or bench code — a CNR identifies the court on
+    its own — and it answers with the full case-history page rather than the
+    JSON envelope the other searches use.
+
+    Note: ``caseStatusSearchType=CNRNumber`` must accompany the action code;
+    without it the server replies ``ERROR_caseStatusSearchTypeBlank``.
+
+    Args:
+        cnr: 16-character CNR, no hyphens or spaces.
+        captcha: Solved CAPTCHA text.
+    """
+    return {
+        "cino": cnr.strip().upper(),
+        "captcha": captcha,
+        "appFlag": "web",
+        "action_code": "fetchStateDistCourtNew",
+        "caseStatusSearchType": "CNRNumber",
+    }
+
+
 def court_orders_form(
     *,
     state_code: str,

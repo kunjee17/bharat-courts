@@ -27,9 +27,11 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 
 from bharat_courts.captcha import default_solver
 from bharat_courts.captcha.base import CaptchaSolver
+from bharat_courts.casedetail import parse_case_detail
 from bharat_courts.config import BharatCourtsConfig
 from bharat_courts.config import config as default_config
 from bharat_courts.districtcourts import endpoints
@@ -43,7 +45,7 @@ from bharat_courts.districtcourts.parser import (
     parse_option_tags,
 )
 from bharat_courts.http import RateLimitedClient
-from bharat_courts.models import CaseInfo, CaseOrder, CauseListEntry
+from bharat_courts.models import CaseDetail, CaseInfo, CaseOrder, CauseListEntry
 
 logger = logging.getLogger(__name__)
 
@@ -429,6 +431,52 @@ class DistrictCourtClient:
     # ------------------------------------------------------------------
     # Case status search
     # ------------------------------------------------------------------
+
+    async def case_status_by_cnr(self, cnr: str) -> CaseDetail:
+        """Look up a case by its CNR number.
+
+        Needs no state/district/complex codes: a CNR identifies the
+        establishment on its own, so this skips the ``set_data`` court setup
+        that the other lookups require. That also means it cannot reuse
+        :meth:`_post_with_captcha_retry`, which exists to re-establish that
+        selection on every retry — the retry loop here is the same shape
+        minus the court setup.
+
+        Args:
+            cnr: 16-character CNR, e.g. "GJRJ060015282018". Hyphens and
+                spaces are stripped.
+
+        Returns:
+            A CaseDetail with the full case page: stage, judge, parties with
+            advocates, acts, hearing history and interim orders.
+
+        Raises:
+            ValueError: If the CNR is not 16 alphanumeric characters.
+            CaptchaError: If every CAPTCHA attempt failed.
+        """
+        cleaned = re.sub(r"[\s-]", "", cnr).upper()
+        if len(cleaned) != 16 or not cleaned.isalnum():
+            raise ValueError(f"CNR must be 16 alphanumeric characters, got {cnr!r}")
+
+        last_error: Exception | None = None
+        for attempt in range(5):
+            if attempt > 0:
+                logger.info("CAPTCHA retry %d/5 — new session", attempt + 1)
+            await self._init_session()
+            captcha = await self._solve_captcha()
+            form = endpoints.case_status_by_cnr_form(cnr=cleaned, captcha=captcha)
+            try:
+                result = await self._post_ajax("cnr_status/searchByCNR", form)
+            except CaptchaError as exc:
+                last_error = exc
+                logger.warning("CAPTCHA attempt %d failed", attempt + 1)
+                continue
+            html = result.get("casetype_list") or result.get("historytable") or ""
+            if html:
+                return parse_case_detail(html, cnr=cleaned, base_url=endpoints.BASE_URL)
+            last_error = CaptchaError("No case data returned")
+
+        raise last_error or CaptchaError("CNR lookup failed")
 
     async def case_status(
         self,
