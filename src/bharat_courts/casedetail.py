@@ -167,14 +167,25 @@ def _history(soup: BeautifulSoup) -> list[HearingEntry]:
     High Court pages carry two: "Case History on Filing Number" covers the
     pre-registration hearings and "Case History" the rest. Both are real
     listings, so both are included rather than picking one.
+
+    Both the row scan and the cell scan are scoped to their nearest ancestor,
+    because Gujarat HC nests the orders table *inside* the second history
+    table. An unqualified ``find_all("tr")`` returns the orders — header row
+    and all — as hearings, and an unqualified ``find_all(["td", "th"])`` on
+    the wrapping row pulls the nested table's cells up into it, which puts the
+    whole orders table back in the count as one more bogus five-column row.
+    Verified on GJHC240464312025: 16 real listings, and 6 rows of order links
+    reading "View" that must not become diary entries.
     """
     tables = soup.find_all("table", class_=re.compile(r"history_table", re.I))
     if not tables:
         return []
     out: list[HearingEntry] = []
-    rows = [r for t in tables for r in t.find_all("tr")]
+    rows = [r for t in tables for r in t.find_all("tr") if r.find_parent("table") is t]
     for row in rows:
-        cells = [_text(c) for c in row.find_all(["td", "th"])]
+        cells = [
+            _text(c) for c in row.find_all(["td", "th"]) if c.find_parent("tr") is row
+        ]
         if not cells or not any(cells):
             continue
         # High Court prints a header row per table; district prints none.

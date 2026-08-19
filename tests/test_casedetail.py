@@ -86,6 +86,23 @@ def test_hc_reads_both_history_tables(hcservices_case_detail_html):
     assert all(h.purpose != "Purpose of Hearing" for h in d.history)
 
 
+# Regression: Gujarat HC nests the orders table inside the history table, so
+# an unqualified row scan swallowed it whole — GJHC240464312025 came back with
+# 22 "hearings" instead of 16, the extra six being the orders header and five
+# rows whose purpose read "View". Every one of those would have become a diary
+# entry. Rows now count only where the history table is their nearest ancestor.
+def test_hc_history_excludes_the_nested_orders_table(hcservices_case_detail_html):
+    detail = parse_case_detail(hcservices_case_detail_html)
+    purposes = [h.purpose for h in detail.history]
+    assert "View" not in purposes, f"orders leaked into history: {purposes}"
+    assert "Order Details" not in purposes
+    assert all(h.hearing_date is not None for h in detail.history)
+    # One row from "Case History on Filing Number", two from "Case History".
+    assert len(detail.history) == 3
+    # And the orders themselves are still found, from their own table.
+    assert len(detail.orders) == 1
+
+
 def test_hc_acts_and_orders(hcservices_case_detail_html):
     d = parse_case_detail(
         hcservices_case_detail_html, base_url="https://hcservices.ecourts.gov.in/hcservices"
