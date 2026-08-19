@@ -229,11 +229,17 @@ class HCServicesClient:
         call returns the advocate's whole book — useful for onboarding a
         practice without entering case numbers by hand.
 
-        Name search is a substring match, so it can pull in other advocates.
-        Each result carries the acting advocates in
-        ``adv_name1``/``adv_name2`` with a bracketed court id
-        ("MR. HEMAL SHAH(6960)"); filter on that id when an exact match
-        matters. Bar-code search does not need filtering.
+        Prefer the bar code. The portal resolves it to the advocate itself
+        and echoes the resolution back in the response's ``adv_name``
+        ("G/504/2011" answered with "MR. HEMAL SHAH(6960)"), so the result is
+        exact and needs no filtering.
+
+        Name search is a substring match and can pull in other advocates.
+        **Filtering it on the bracketed court id silently loses matters**:
+        for G/504/2011 the id appears on 6,666 rows but 97 more — 64 further
+        CNRs, all filed 2015 and earlier — carry the bare name with no id at
+        all. Both searches returned the same 2,779 matters; only the
+        id-filtered subset was short.
 
         Args:
             court: Court object.
