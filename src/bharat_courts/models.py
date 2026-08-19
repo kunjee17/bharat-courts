@@ -286,6 +286,11 @@ class CauseListEntry(_Serializable):
     court_number: str = ""
     judge: str = ""
     listing_date: date | None = None
+    #: The day the matter was last in court, where the source gives it. The
+    #: advocate cause list returns both dates per row — this one and the
+    #: listing being queried — and a diary needs the pair to tell an
+    #: adjournment from the hearing that produced it.
+    business_date: date | None = None
     item_number: str = ""
     cnr_number: str = ""  # present on advocate cause lists, absent on PDFs
     purpose: str = ""  # e.g. "182-FOR FINAL HEARING"

@@ -178,9 +178,15 @@ def parse_advocate_cause_list(raw: str) -> list[CauseListEntry]:
 
     Two portal quirks worth knowing:
 
-    - **Rows are per-party, not per-case.** A case with seven petitioners
-      comes back as seven rows sharing one ``cino``. Callers that want cases
-      rather than parties should run :func:`dedupe_by_cnr` over the result.
+    - **Rows are a cross-product of parties and judges, not one per case.**
+      Verified on GJHC240569342026, which returned **8 rows — 4 petitioners
+      by the 2 judges of a division bench**. A count of rows is not a count
+      of matters, and :func:`dedupe_by_cnr` collapses both dimensions, so the
+      judge it keeps is one of the bench rather than the coram.
+    - **Both dates are returned per row.** ``date_next_list`` is the listing
+      being queried and ``todays_date`` is when the matter was last in court
+      — so on a board fetched for 20-08-2026, ``todays_date`` read 18-08-2026.
+      They are not two names for the same day.
     - **``court_no`` is an internal establishment code** (e.g. "5377"), not
       the court number shown on a display board. Join to a board on
       ``judge`` instead.
@@ -205,6 +211,7 @@ def parse_advocate_cause_list(raw: str) -> list[CauseListEntry]:
                 court_number=str(rec.get("court_no") or ""),
                 judge=html.unescape(rec.get("judgename") or ""),
                 listing_date=_parse_date(str(rec.get("date_next_list") or "")),
+                business_date=_parse_date(str(rec.get("todays_date") or "")),
                 cnr_number=rec.get("cino") or "",
                 purpose=html.unescape(rec.get("purpose_name") or ""),
             )
@@ -215,10 +222,14 @@ def parse_advocate_cause_list(raw: str) -> list[CauseListEntry]:
 
 
 def dedupe_by_cnr(entries: list[CauseListEntry]) -> list[CauseListEntry]:
-    """Collapse per-party rows into one entry per case, preserving order.
+    """Collapse duplicate rows into one entry per case, preserving order.
 
-    The portal repeats a case once per party, so a 39-row response can be
-    17 actual cases. The first row for each CNR is kept.
+    The portal repeats a case once per party *per judge*, so a 14-row
+    response can be 4 actual matters. The first row for each CNR is kept.
+
+    Note what that discards: on a division bench the surviving row names one
+    judge, not the coram, and it names one party of several. Callers that
+    need either should group the raw rows themselves rather than use this.
     """
     seen: set[str] = set()
     out = []

@@ -244,3 +244,16 @@ def test_parse_advocate_cause_list_dedupe(hcservices_advocate_cause_list_json):
 def test_advocate_cause_list_empty_envelope():
     entries = parse_advocate_cause_list('{"con": [], "totRecords": 0, "Error": ""}')
     assert entries == []
+
+
+# Both dates ride on every row and mean different things: `date_next_list` is
+# the listing being queried, `todays_date` is when the matter was last in
+# court. Dropping the second loses the adjournment half of a diary entry.
+def test_advocate_cause_list_carries_both_dates(hcservices_advocate_cause_list_json):
+    from datetime import date
+
+    entries = parse_advocate_cause_list(hcservices_advocate_cause_list_json)
+    first = entries[0]
+    assert first.listing_date == date(2026, 8, 17)
+    assert first.business_date == date(2026, 8, 13)
+    assert first.listing_date != first.business_date
