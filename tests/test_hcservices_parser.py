@@ -6,6 +6,8 @@ import pytest
 
 from bharat_courts.hcservices.parser import (
     CaptchaError,
+    dedupe_by_cnr,
+    parse_advocate_cause_list,
     parse_case_status,
     parse_cause_list,
     parse_orders,
@@ -182,3 +184,76 @@ def test_parse_cause_list(hcservices_cause_list_html):
 
 def test_parse_cause_list_empty():
     assert parse_cause_list("<html></html>") == []
+
+
+# ------------------------------------------------------------------
+# Advocate search / advocate cause list
+# ------------------------------------------------------------------
+
+
+def test_parse_advocate_search_reuses_case_status(hcservices_advocate_search_json):
+    """Advocate search returns the same envelope as any other case search."""
+    results = parse_case_status(hcservices_advocate_search_json)
+    assert len(results) == 2
+
+    first = results[0]
+    assert first.cnr_number == "GJHC240100012024"
+    assert first.case_number == "1001/2024"
+    assert first.case_type == "FA"
+    assert first.petitioner == "ABC INDUSTRIES LTD"
+    # showRecords never populates status, whatever the search mode
+    assert first.status == ""
+
+
+def test_parse_advocate_cause_list(hcservices_advocate_cause_list_json):
+    entries = parse_advocate_cause_list(hcservices_advocate_cause_list_json)
+    # four rows, because the portal repeats a case once per party
+    assert len(entries) == 4
+
+    first = entries[0]
+    assert first.cnr_number == "GJHC240200012026"
+    assert first.case_number == "2001/2026"
+    assert first.case_type == "FA"
+    assert first.petitioner == "ABC INDUSTRIES LTD"
+    assert first.advocate_petitioner == "MS. PRIYA SHARMA(1234)"
+    assert first.purpose == "181-FOR FINAL DISPOSAL"
+    assert first.judge == "HONOURABLE MR.JUSTICE A B EXAMPLE"
+    # date_next_list arrives as ISO, unlike most portal dates
+    assert first.listing_date == date(2026, 8, 17)
+    # court_no is an internal establishment code, not a display-board number
+    assert first.court_number == "5377"
+    # no serial number is returned by this endpoint
+    assert first.item_number == ""
+    assert first.serial_number == 0
+
+
+def test_parse_advocate_cause_list_dedupe(hcservices_advocate_cause_list_json):
+    """Rows 2 and 3 share a CNR; dedupe collapses them to one case."""
+    entries = parse_advocate_cause_list(hcservices_advocate_cause_list_json)
+    cases = dedupe_by_cnr(entries)
+    assert len(cases) == 3
+    assert [c.cnr_number for c in cases] == [
+        "GJHC240200012026",
+        "GJHC240200022025",
+        "GJHC240200032024",
+    ]
+    # first row per CNR wins, so the first petitioner is kept
+    assert cases[1].petitioner == "FIRST PETITIONER"
+
+
+def test_advocate_cause_list_empty_envelope():
+    entries = parse_advocate_cause_list('{"con": [], "totRecords": 0, "Error": ""}')
+    assert entries == []
+
+
+# Both dates ride on every row and mean different things: `date_next_list` is
+# the listing being queried, `todays_date` is when the matter was last in
+# court. Dropping the second loses the adjournment half of a diary entry.
+def test_advocate_cause_list_carries_both_dates(hcservices_advocate_cause_list_json):
+    from datetime import date
+
+    entries = parse_advocate_cause_list(hcservices_advocate_cause_list_json)
+    first = entries[0]
+    assert first.listing_date == date(2026, 8, 17)
+    assert first.business_date == date(2026, 8, 13)
+    assert first.listing_date != first.business_date

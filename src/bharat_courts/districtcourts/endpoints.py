@@ -251,6 +251,27 @@ def fill_case_type_form(
 # ---------------------------------------------------------------------------
 
 
+def case_status_by_cnr_form(*, cnr: str, captcha: str) -> dict[str, str]:
+    """Build form data for a CNR lookup on the district portal.
+
+    Derived from ``funViewCinoHistory()`` in ``js/searchByCNR.js``. The
+    controller action is ``cnr_status/searchByCNR``. Unlike the case-number
+    searches this needs no state/district/complex codes — a CNR identifies the
+    establishment on its own — so it also needs no ``set_data`` court setup.
+
+    The response is the usual AJAX envelope; the case page arrives as HTML in
+    ``casetype_list``.
+
+    Args:
+        cnr: 16-character CNR, no hyphens or spaces.
+        captcha: Solved CAPTCHA text.
+    """
+    return {
+        "cino": cnr.strip().upper(),
+        "fcaptcha_code": captcha,
+    }
+
+
 def case_status_by_number_form(
     *,
     state_code: str,

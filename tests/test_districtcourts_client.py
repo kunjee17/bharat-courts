@@ -637,3 +637,25 @@ async def test_invalid_request_not_retried_when_delimeter_unchanged(fast_config,
                 await client.list_districts("8")
 
     assert len(calls) == 1, "should not retry when the secret did not rotate"
+
+
+# ------------------------------------------------------------------
+# CNR lookup
+# ------------------------------------------------------------------
+
+
+def test_cnr_form():
+    from bharat_courts.districtcourts import endpoints as dc_endpoints
+
+    form = dc_endpoints.case_status_by_cnr_form(cnr="gjrj060015282018", captcha="abc123")
+    # the district portal names the captcha field differently from HC
+    assert form == {"cino": "GJRJ060015282018", "fcaptcha_code": "abc123"}
+
+
+@pytest.mark.parametrize("bad", ["", "GJRJ06001528201", "GJRJ0600152820188", "GJRJ0600152820!8"])
+async def test_cnr_lookup_rejects_malformed(bad):
+    from bharat_courts import DistrictCourtClient
+
+    client = DistrictCourtClient()
+    with pytest.raises(ValueError, match="16 alphanumeric"):
+        await client.case_status_by_cnr(bad)

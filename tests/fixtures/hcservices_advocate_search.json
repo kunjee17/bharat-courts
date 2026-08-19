@@ -1,0 +1,24 @@
+{
+ "con": [
+  "[{\"orderurlpath\": \"AbCdEf1\", \"cino\": \"GJHC240100012024\", \"case_no\": \"201200010012024\", \"case_type\": \"12\", \"case_year\": \"2024\", \"case_no2\": 1001, \"pet_name\": \"ABC INDUSTRIES LTD\", \"res_name\": \"STATE OF GUJARAT\", \"lpet_name\": \"\", \"lres_name\": \"\", \"party_name1\": \"N\", \"party_name2\": \"N\", \"adv_name1\": \"MS. PRIYA SHARMA(1234)\", \"adv_name2\": \"GOVERNMENT PLEADER(1)\", \"ladv_name1\": \"\", \"ladv_name2\": \"\", \"date_of_decision\": \"None\", \"type_name\": \"FA\"}, {\"orderurlpath\": \"AbCdEf2\", \"cino\": \"GJHC240100022023\", \"case_no\": \"201200010022023\", \"case_type\": \"12\", \"case_year\": \"2023\", \"case_no2\": 1002, \"pet_name\": \"XYZ ENTERPRISES PVT LTD\", \"res_name\": \"NATIONAL INSURANCE COMPANY\", \"lpet_name\": \"None\", \"lres_name\": \"None\", \"party_name1\": \"N\", \"party_name2\": \"N\", \"adv_name1\": \"MS. PRIYA SHARMA(1234)\", \"adv_name2\": \"MR. A B MEHTA(5678)\", \"ladv_name1\": \"None\", \"ladv_name2\": \"None\", \"date_of_decision\": \"2025-10-21\", \"type_name\": \"FA\"}]"
+ ],
+ "totRecords": 2,
+ "cntEst2": null,
+ "courtNameArr": [
+  "Gujarat High Court"
+ ],
+ "court_code": [
+  "1"
+ ],
+ "totEstCnt": [
+  1
+ ],
+ "adv_name": "PRIYA SHARMA",
+ "normalVArr": [
+  "1"
+ ],
+ "hide_partyname_estArr": [
+  "N"
+ ],
+ "Error": ""
+}

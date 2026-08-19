@@ -15,20 +15,30 @@ Flow:
 from __future__ import annotations
 
 import logging
+import re
 
 from bharat_courts.captcha import default_solver
 from bharat_courts.captcha.base import CaptchaSolver
+from bharat_courts.casedetail import parse_case_detail
 from bharat_courts.config import BharatCourtsConfig
 from bharat_courts.config import config as default_config
 from bharat_courts.hcservices import endpoints
 from bharat_courts.hcservices.parser import (
     CaptchaError,
+    parse_advocate_cause_list,
     parse_case_status,
     parse_cause_list,
     parse_orders,
 )
 from bharat_courts.http import RateLimitedClient
-from bharat_courts.models import CaseInfo, CaseOrder, CauseListPDF, Court
+from bharat_courts.models import (
+    CaseDetail,
+    CaseInfo,
+    CaseOrder,
+    CauseListEntry,
+    CauseListPDF,
+    Court,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +213,137 @@ class HCServicesClient:
         for r in results:
             r.court_name = court.name
         return results
+
+    async def case_status_by_advocate(
+        self,
+        court: Court,
+        *,
+        advocate_name: str | None = None,
+        bar_code: str | None = None,
+        bench_code: str = "1",
+        status_filter: str = "Both",
+    ) -> list[CaseInfo]:
+        """Search an advocate's cases by name or bar registration number.
+
+        Unlike :meth:`case_status_by_party` this needs no year, so a single
+        call returns the advocate's whole book — useful for onboarding a
+        practice without entering case numbers by hand.
+
+        Prefer the bar code. The portal resolves it to the advocate itself
+        and echoes the resolution back in the response's ``adv_name``
+        ("G/504/2011" answered with "MR. HEMAL SHAH(6960)"), so the result is
+        exact and needs no filtering.
+
+        Name search is a substring match and can pull in other advocates.
+        **Filtering it on the bracketed court id silently loses matters**:
+        for G/504/2011 the id appears on 6,666 rows but 97 more — 64 further
+        CNRs, all filed 2015 and earlier — carry the bare name with no id at
+        all. Both searches returned the same 2,779 matters; only the
+        id-filtered subset was short.
+
+        Args:
+            court: Court object.
+            advocate_name: Advocate name, full or partial (min 3 chars).
+            bar_code: Bar registration number as ``<STATE>/<NUMBER>/<YEAR>``,
+                e.g. "G/504/2011".
+            bench_code: Bench code from :meth:`list_benches` (default "1").
+            status_filter: "Pending", "Disposed", or "Both".
+
+        Returns:
+            List of matching CaseInfo objects. Results are one row per
+            party, so a case with several petitioners repeats.
+
+        Raises:
+            ValueError: If neither or both of advocate_name / bar_code given.
+        """
+
+        def build_form(captcha: str) -> dict:
+            return endpoints.case_status_by_advocate_form(
+                state_code=court.state_code,
+                court_code=bench_code,
+                captcha=captcha,
+                advocate_name=advocate_name,
+                bar_code=bar_code,
+                status_filter=status_filter,
+            )
+
+        resp = await self._post_with_captcha_retry(endpoints.SHOW_RECORDS_URL, build_form)
+        results = parse_case_status(resp.text)
+        for r in results:
+            r.court_name = court.name
+        return results
+
+    async def advocate_cause_list(
+        self,
+        court: Court,
+        *,
+        bar_code: str,
+        causelist_date: str,
+        bench_code: str = "1",
+    ) -> list[CauseListEntry]:
+        """Fetch an advocate's cause list for a given date.
+
+        This is the court's own answer to "what do I have on this date",
+        so it needs no matching against a party or advocate name.
+
+        Rows are per-party; pass the result through
+        :func:`~bharat_courts.hcservices.parser.dedupe_by_cnr` for one entry
+        per case. No item/serial number is returned — that appears only in
+        the cause list PDF.
+
+        Args:
+            court: Court object.
+            bar_code: Bar registration number, e.g. "G/504/2011".
+            causelist_date: Listing date as ``DD-MM-YYYY``. The portal
+                rejects dates more than one month ahead.
+            bench_code: Bench code from :meth:`list_benches` (default "1").
+
+        Returns:
+            List of CauseListEntry, one per party per listed case.
+        """
+
+        def build_form(captcha: str) -> dict:
+            return endpoints.advocate_cause_list_form(
+                state_code=court.state_code,
+                court_code=bench_code,
+                captcha=captcha,
+                bar_code=bar_code,
+                causelist_date=causelist_date,
+            )
+
+        resp = await self._post_with_captcha_retry(endpoints.SHOW_RECORDS_URL, build_form)
+        return parse_advocate_cause_list(resp.text)
+
+    async def case_status_by_cnr(self, cnr: str) -> CaseDetail:
+        """Look up a case by its CNR number.
+
+        This returns considerably more than :meth:`case_status`: the search
+        endpoints answer with identity only, leaving ``status`` and
+        ``next_hearing_date`` empty, whereas a CNR lookup returns the whole
+        case page — stage, coram, every party with advocates, the acts, the
+        full hearing history and the orders — in a single request.
+
+        Args:
+            cnr: 16-character CNR, e.g. "GJHC240464312025". Hyphens and
+                spaces are stripped.
+
+        Returns:
+            A CaseDetail. Sections the case does not have (no orders yet, no
+            acts recorded) come back empty rather than raising.
+
+        Raises:
+            ValueError: If the CNR is not 16 alphanumeric characters.
+            CaptchaError: If every CAPTCHA attempt failed.
+        """
+        cleaned = re.sub(r"[\s-]", "", cnr).upper()
+        if len(cleaned) != 16 or not cleaned.isalnum():
+            raise ValueError(f"CNR must be 16 alphanumeric characters, got {cnr!r}")
+
+        def build_form(captcha: str) -> dict:
+            return endpoints.case_status_by_cnr_form(cnr=cleaned, captcha=captcha)
+
+        resp = await self._post_with_captcha_retry(endpoints.INDEX_QRY_URL, build_form)
+        return parse_case_detail(resp.text, cnr=cleaned, base_url=endpoints.BASE_URL)
 
     async def court_orders(
         self,

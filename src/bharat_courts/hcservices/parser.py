@@ -20,7 +20,7 @@ from datetime import date, datetime
 
 from bs4 import BeautifulSoup, Tag
 
-from bharat_courts.models import CaseInfo, CaseOrder, CauseListPDF
+from bharat_courts.models import CaseInfo, CaseOrder, CauseListEntry, CauseListPDF
 
 logger = logging.getLogger(__name__)
 
@@ -33,15 +33,21 @@ DATE_FORMAT = "%d-%m-%Y"
 
 
 def _parse_date(text: str) -> date | None:
-    """Parse DD-MM-YYYY date string."""
+    """Parse a portal date string.
+
+    Most endpoints use DD-MM-YYYY, but the advocate cause list returns
+    ``date_next_list`` as ISO (YYYY-MM-DD), so ISO is tried as a fallback.
+    """
     text = text.strip()
-    if not text:
+    if not text or text.lower() in {"none", "null", "-", "--"}:
         return None
-    try:
-        return datetime.strptime(text, DATE_FORMAT).date()
-    except ValueError:
-        logger.debug("Could not parse date: %s", text)
-        return None
+    for fmt in (DATE_FORMAT, "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    logger.debug("Could not parse date: %s", text)
+    return None
 
 
 def _clean_text(text: str | None) -> str:
@@ -156,6 +162,84 @@ def parse_case_status(raw: str) -> list[CaseInfo]:
 
     logger.info("Parsed %d/%d case status records", len(results), total)
     return results
+
+
+# ---------------------------------------------------------------------------
+# Advocate cause list — JSON-based
+# ---------------------------------------------------------------------------
+
+
+def parse_advocate_cause_list(raw: str) -> list[CauseListEntry]:
+    """Parse an advocate's cause list (``search_type=3`` from showRecords).
+
+    Shares the ``{"con": ["[{...}]"]}`` envelope with case status, but the
+    records carry listing fields that plain case status does not:
+    ``date_next_list, purpose_name, court_no, judgename``.
+
+    Two portal quirks worth knowing:
+
+    - **Rows are a cross-product of parties and judges, not one per case.**
+      Verified on GJHC240569342026, which returned **8 rows — 4 petitioners
+      by the 2 judges of a division bench**. A count of rows is not a count
+      of matters, and :func:`dedupe_by_cnr` collapses both dimensions, so the
+      judge it keeps is one of the bench rather than the coram.
+    - **Both dates are returned per row.** ``date_next_list`` is the listing
+      being queried and ``todays_date`` is when the matter was last in court
+      — so on a board fetched for 20-08-2026, ``todays_date`` read 18-08-2026.
+      They are not two names for the same day.
+    - **``court_no`` is an internal establishment code** (e.g. "5377"), not
+      the court number shown on a display board. Join to a board on
+      ``judge`` instead.
+
+    No item/serial number is returned — that lives only in the cause list
+    PDF, so :attr:`CauseListEntry.item_number` is left empty here.
+    """
+    records, total = _parse_json_envelope(raw)
+    results = []
+    for rec in records:
+        case_no2 = str(rec.get("case_no2", ""))
+        case_year = str(rec.get("case_year", ""))
+        results.append(
+            CauseListEntry(
+                serial_number=0,
+                case_number=f"{case_no2}/{case_year}" if case_no2 and case_year else "",
+                case_type=rec.get("type_name") or "",
+                petitioner=html.unescape(rec.get("pet_name") or ""),
+                respondent=html.unescape(rec.get("res_name") or ""),
+                advocate_petitioner=html.unescape(rec.get("adv_name1") or ""),
+                advocate_respondent=html.unescape(rec.get("adv_name2") or ""),
+                court_number=str(rec.get("court_no") or ""),
+                judge=html.unescape(rec.get("judgename") or ""),
+                listing_date=_parse_date(str(rec.get("date_next_list") or "")),
+                business_date=_parse_date(str(rec.get("todays_date") or "")),
+                cnr_number=rec.get("cino") or "",
+                purpose=html.unescape(rec.get("purpose_name") or ""),
+            )
+        )
+
+    logger.info("Parsed %d/%d advocate cause list rows", len(results), total)
+    return results
+
+
+def dedupe_by_cnr(entries: list[CauseListEntry]) -> list[CauseListEntry]:
+    """Collapse duplicate rows into one entry per case, preserving order.
+
+    The portal repeats a case once per party *per judge*, so a 14-row
+    response can be 4 actual matters. The first row for each CNR is kept.
+
+    Note what that discards: on a division bench the surviving row names one
+    judge, not the coram, and it names one party of several. Callers that
+    need either should group the raw rows themselves rather than use this.
+    """
+    seen: set[str] = set()
+    out = []
+    for e in entries:
+        key = e.cnr_number or f"{e.case_type}/{e.case_number}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(e)
+    return out
 
 
 # ---------------------------------------------------------------------------

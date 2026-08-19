@@ -1,0 +1,24 @@
+{
+ "con": [
+  "[{\"case_type\": \"12\", \"court_no\": \"5377\", \"todays_date\": \"2026-08-13\", \"type_name\": \"FA\", \"desgname\": \"JUDGE, HIGH COURT OF GUJARAT\", \"desgcode\": \"112\", \"jcode\": \"1038\", \"judgename\": \"HONOURABLE MR.JUSTICE A B EXAMPLE\", \"lpurpose_name\": \"H##F\", \"lpet_name\": \"\", \"lres_name\": \"\", \"party_name1\": \"N\", \"party_name2\": \"N\", \"ladv_name1\": \"\", \"ladv_name2\": \"\", \"date_of_decision\": \"None\", \"orderurlpath\": \"Zz1\", \"cino\": \"GJHC240200012026\", \"case_no\": \"201200020012026\", \"case_year\": \"2026\", \"case_no2\": 2001, \"pet_name\": \"ABC INDUSTRIES LTD\", \"res_name\": \"STATE OF GUJARAT\", \"adv_name1\": \"MS. PRIYA SHARMA(1234)\", \"adv_name2\": \"GOVERNMENT PLEADER(1)\", \"date_next_list\": \"2026-08-17\", \"purpose_next\": \"1181\", \"purpose_name\": \"181-FOR FINAL DISPOSAL\"}, {\"case_type\": \"12\", \"court_no\": \"5377\", \"todays_date\": \"2026-08-13\", \"type_name\": \"FA\", \"desgname\": \"JUDGE, HIGH COURT OF GUJARAT\", \"desgcode\": \"112\", \"jcode\": \"1038\", \"judgename\": \"HONOURABLE MR.JUSTICE A B EXAMPLE\", \"lpurpose_name\": \"H##F\", \"lpet_name\": \"\", \"lres_name\": \"\", \"party_name1\": \"N\", \"party_name2\": \"N\", \"ladv_name1\": \"\", \"ladv_name2\": \"\", \"date_of_decision\": \"None\", \"orderurlpath\": \"Zz2\", \"cino\": \"GJHC240200022025\", \"case_no\": \"201200020022025\", \"case_year\": \"2025\", \"case_no2\": 2002, \"pet_name\": \"FIRST PETITIONER\", \"res_name\": \"XYZ ENTERPRISES PVT LTD\", \"adv_name1\": \"MS. PRIYA SHARMA(1234)\", \"adv_name2\": \"NOTICE UNSERVED(8)\", \"date_next_list\": \"2026-08-17\", \"purpose_next\": \"1192\", \"purpose_name\": \"192-NOTICE & ADJOURNED MATTERS\"}, {\"case_type\": \"12\", \"court_no\": \"5377\", \"todays_date\": \"2026-08-13\", \"type_name\": \"FA\", \"desgname\": \"JUDGE, HIGH COURT OF GUJARAT\", \"desgcode\": \"112\", \"jcode\": \"1038\", \"judgename\": \"HONOURABLE MR.JUSTICE A B EXAMPLE\", \"lpurpose_name\": \"H##F\", \"lpet_name\": \"\", \"lres_name\": \"\", \"party_name1\": \"N\", \"party_name2\": \"N\", \"ladv_name1\": \"\", \"ladv_name2\": \"\", \"date_of_decision\": \"None\", \"orderurlpath\": \"Zz2\", \"cino\": \"GJHC240200022025\", \"case_no\": \"201200020022025\", \"case_year\": \"2025\", \"case_no2\": 2002, \"pet_name\": \"SECOND PETITIONER\", \"res_name\": \"\", \"adv_name1\": \"MS. PRIYA SHARMA(1234)\", \"adv_name2\": \"\", \"date_next_list\": \"2026-08-17\", \"purpose_next\": \"1192\", \"purpose_name\": \"192-NOTICE & ADJOURNED MATTERS\"}, {\"case_type\": \"12\", \"court_no\": \"5351\", \"todays_date\": \"2026-08-13\", \"type_name\": \"FA\", \"desgname\": \"JUDGE, HIGH COURT OF GUJARAT\", \"desgcode\": \"112\", \"jcode\": \"1038\", \"judgename\": \"HONOURABLE MR.JUSTICE A B EXAMPLE\", \"lpurpose_name\": \"H##F\", \"lpet_name\": \"\", \"lres_name\": \"\", \"party_name1\": \"N\", \"party_name2\": \"N\", \"ladv_name1\": \"\", \"ladv_name2\": \"\", \"date_of_decision\": \"None\", \"orderurlpath\": \"Zz3\", \"cino\": \"GJHC240200032024\", \"case_no\": \"201200020032024\", \"case_year\": \"2024\", \"case_no2\": 2003, \"pet_name\": \"THIRD PARTY LTD\", \"res_name\": \"STATE OF GUJARAT\", \"adv_name1\": \"MS. PRIYA SHARMA(1234)\", \"adv_name2\": \"GOVERNMENT PLEADER(1)\", \"date_next_list\": \"2026-08-24\", \"purpose_next\": \"1182\", \"purpose_name\": \"182-FOR FINAL HEARING\"}]"
+ ],
+ "totRecords": 4,
+ "cntEst2": null,
+ "courtNameArr": [
+  "Gujarat High Court"
+ ],
+ "court_code": [
+  "1"
+ ],
+ "totEstCnt": [
+  1
+ ],
+ "adv_name": "PRIYA SHARMA",
+ "normalVArr": [
+  "1"
+ ],
+ "hide_partyname_estArr": [
+  "N"
+ ],
+ "Error": ""
+}

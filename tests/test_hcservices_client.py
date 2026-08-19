@@ -9,6 +9,7 @@ from httpx import Response
 from bharat_courts.captcha.base import CaptchaSolver
 from bharat_courts.config import BharatCourtsConfig
 from bharat_courts.courts import get_court
+from bharat_courts.hcservices import endpoints
 from bharat_courts.hcservices.client import HCServicesClient
 from bharat_courts.hcservices.endpoints import (
     CAPTCHA_IMAGE_URL,
@@ -54,3 +55,79 @@ async def test_case_status(fast_config, captcha_solver):
     assert len(results) == 2
     assert results[0].case_number == "WP(C)/12345/2024"
     assert results[0].court_name == "Delhi High Court"
+
+
+# ------------------------------------------------------------------
+# Advocate form builders
+# ------------------------------------------------------------------
+
+
+def test_advocate_form_by_name():
+    form = endpoints.case_status_by_advocate_form(
+        state_code="17", captcha="abc123", advocate_name="PRIYA SHARMA"
+    )
+    assert form["caseStatusSearchType"] == "CSAdvName"
+    assert form["search_type"] == "1"
+    assert form["advocate_name"] == "PRIYA SHARMA"
+    assert "adv_bar_state" not in form
+
+
+def test_advocate_form_by_bar_code():
+    form = endpoints.case_status_by_advocate_form(
+        state_code="17", captcha="abc123", bar_code="G/504/2011"
+    )
+    # NOT CSAdvNamebar -- sending that makes the server return ERROR_VAL
+    assert form["caseStatusSearchType"] == "CSAdvName"
+    assert form["search_type"] == "2"
+    assert form["adv_bar_state"] == "G/504/2011"
+    assert "advocate_name" not in form
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {},
+        {"advocate_name": "PRIYA SHARMA", "bar_code": "G/504/2011"},
+    ],
+)
+def test_advocate_form_requires_exactly_one_selector(kwargs):
+    with pytest.raises(ValueError):
+        endpoints.case_status_by_advocate_form(state_code="17", captcha="abc123", **kwargs)
+
+
+def test_advocate_cause_list_form():
+    form = endpoints.advocate_cause_list_form(
+        state_code="17", captcha="abc123", bar_code="G/504/2011", causelist_date="17-08-2026"
+    )
+    assert form["search_type"] == "3"
+    assert form["f"] == "date_case_list"
+    assert form["caselist_date_dmy"] == "17-08-2026"
+    assert form["adv_bar_state"] == "G/504/2011"
+
+
+# ------------------------------------------------------------------
+# CNR lookup
+# ------------------------------------------------------------------
+
+
+def test_cnr_form():
+    form = endpoints.case_status_by_cnr_form(cnr="GJHC240464312025", captcha="abc123")
+    assert form["cino"] == "GJHC240464312025"
+    assert form["action_code"] == "fetchStateDistCourtNew"
+    # without this the server answers ERROR_caseStatusSearchTypeBlank
+    assert form["caseStatusSearchType"] == "CNRNumber"
+    assert form["appFlag"] == "web"
+
+
+def test_cnr_form_normalises_case():
+    form = endpoints.case_status_by_cnr_form(cnr=" gjhc240464312025 ", captcha="x")
+    assert form["cino"] == "GJHC240464312025"
+
+
+@pytest.mark.parametrize(
+    "bad", ["", "TOO-SHORT", "GJHC24046431202", "GJHC2404643120255", "GJHC2404643120!5"]
+)
+async def test_cnr_lookup_rejects_malformed(bad):
+    client = HCServicesClient()
+    with pytest.raises(ValueError, match="16 alphanumeric"):
+        await client.case_status_by_cnr(bad)

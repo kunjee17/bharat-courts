@@ -3,6 +3,7 @@
 from bharat_courts._version import __version__
 from bharat_courts.calcuttahc.client import CalcuttaHCClient
 from bharat_courts.captcha import CaptchaSolver, ManualCaptchaSolver, default_solver
+from bharat_courts.casedetail import parse_case_detail
 from bharat_courts.config import BharatCourtsConfig, config
 from bharat_courts.courts import (
     ALL_COURTS,
@@ -21,19 +22,28 @@ from bharat_courts.hcservices.parser import CaptchaError
 from bharat_courts.http import RateLimitedClient
 from bharat_courts.judgments.client import JudgmentSearchClient
 from bharat_courts.models import (
+    ActEntry,
+    CaseDetail,
     CaseInfo,
     CaseOrder,
     CauseListEntry,
     CauseListPDF,
     Court,
     CourtType,
+    HearingEntry,
     Judgment,
     JudgmentResult,
+    PartyEntry,
     SearchResult,
 )
 from bharat_courts.sci.client import SCIClient
 
 __all__ = [
+    "parse_case_detail",
+    "PartyEntry",
+    "HearingEntry",
+    "CaseDetail",
+    "ActEntry",
     "__version__",
     "ALL_COURTS",
     "BharatCourtsConfig",

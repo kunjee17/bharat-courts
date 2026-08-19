@@ -190,6 +190,84 @@ class Judgment(_Serializable):
 
 
 @dataclass
+class PartyEntry(_Serializable):
+    """A party to a case, with the advocate(s) appearing for them."""
+
+    name: str
+    advocate: str = ""
+
+
+@dataclass
+class ActEntry(_Serializable):
+    """An act and the sections invoked under it."""
+
+    act: str
+    sections: str = ""
+
+
+@dataclass
+class HearingEntry(_Serializable):
+    """One row of a case's hearing history.
+
+    ``cause_list_type`` and ``judge`` are only populated where the portal
+    supplies them — district court history tables carry a judge but no cause
+    list type, High Court tables carry both but often leave judge blank.
+    """
+
+    hearing_date: date | None = None
+    business_date: date | None = None
+    purpose: str = ""
+    judge: str = ""
+    cause_list_type: str = ""
+
+
+@dataclass
+class CaseDetail(_Serializable):
+    """Full case record from a CNR lookup.
+
+    This is deliberately richer than :class:`CaseInfo`, which models a search
+    *result*. A CNR lookup returns the whole case page — status, stage, the
+    bench, every party with their advocates, the acts invoked, the complete
+    hearing history and the orders — none of which a search response carries.
+
+    Fields absent from a given portal are left at their default rather than
+    guessed: district courts report ``court_number_and_judge`` where High
+    Courts report ``coram`` plus ``bench_type``.
+    """
+
+    cnr_number: str = ""
+    case_type: str = ""
+    filing_number: str = ""
+    filing_date: date | None = None
+    registration_number: str = ""
+    registration_date: date | None = None
+
+    first_hearing_date: date | None = None
+    next_hearing_date: date | None = None
+    decision_date: date | None = None
+    case_stage: str = ""
+    status: str = ""
+
+    coram: str = ""
+    bench_type: str = ""
+    court_number_and_judge: str = ""
+    court_name: str = ""
+    state: str = ""
+    district: str = ""
+
+    petitioners: list[PartyEntry] = field(default_factory=list)
+    respondents: list[PartyEntry] = field(default_factory=list)
+    acts: list[ActEntry] = field(default_factory=list)
+    history: list[HearingEntry] = field(default_factory=list)
+    orders: list[CaseOrder] = field(default_factory=list)
+
+    @property
+    def is_disposed(self) -> bool:
+        """True when the portal has recorded a decision date."""
+        return self.decision_date is not None
+
+
+@dataclass
 class CauseListEntry(_Serializable):
     """An entry from a court's cause list (daily schedule).
 
@@ -208,7 +286,14 @@ class CauseListEntry(_Serializable):
     court_number: str = ""
     judge: str = ""
     listing_date: date | None = None
+    #: The day the matter was last in court, where the source gives it. The
+    #: advocate cause list returns both dates per row — this one and the
+    #: listing being queried — and a diary needs the pair to tell an
+    #: adjournment from the hearing that produced it.
+    business_date: date | None = None
     item_number: str = ""
+    cnr_number: str = ""  # present on advocate cause lists, absent on PDFs
+    purpose: str = ""  # e.g. "182-FOR FINAL HEARING"
 
 
 @dataclass

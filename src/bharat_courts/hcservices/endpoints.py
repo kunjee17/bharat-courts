@@ -122,6 +122,122 @@ def case_status_by_party_form(
     }
 
 
+def case_status_by_advocate_form(
+    *,
+    state_code: str,
+    court_code: str = "1",
+    captcha: str,
+    advocate_name: str | None = None,
+    bar_code: str | None = None,
+    status_filter: str = "Both",
+) -> dict[str, str]:
+    """Build form data for case status search by advocate name or bar code.
+
+    Derived from the portal's advocate branch of ``funShowRecords()``. The
+    radio group ``radAdvt`` selects the mode and the JS maps it to a
+    ``search_type`` value: 1 = advocate name, 2 = bar registration number.
+
+    Note: ``caseStatusSearchType`` is ``CSAdvName`` for **both** modes. The
+    portal also defines a ``CSAdvNamebar`` label, but sending it as the
+    search type makes the server return ERROR_VAL — ``search_type`` is what
+    selects name vs bar code.
+
+    Args:
+        state_code: HC state code from courts registry.
+        court_code: Bench code from fillHCBench (default "1" = principal).
+        captcha: Solved CAPTCHA text.
+        advocate_name: Advocate name, full or partial (min 3 chars).
+        bar_code: Bar registration number as ``<STATE>/<NUMBER>/<YEAR>``,
+            e.g. "G/504/2011". Note this is *not* the bracketed id shown
+            beside advocate names in results ("MR. HEMAL SHAH(6960)"); that
+            is an internal court id.
+        status_filter: "Pending", "Disposed", or "Both".
+
+    Raises:
+        ValueError: If neither or both of advocate_name / bar_code are given.
+    """
+    if bool(advocate_name) == bool(bar_code):
+        raise ValueError("pass exactly one of advocate_name or bar_code")
+
+    form = {
+        "court_code": court_code,
+        "state_code": state_code,
+        "court_complex_code": court_code,
+        "caseStatusSearchType": "CSAdvName",
+        "captcha": captcha,
+        "f": status_filter,
+    }
+    if advocate_name:
+        form["advocate_name"] = advocate_name
+        form["search_type"] = "1"
+    else:
+        form["adv_bar_state"] = bar_code or ""
+        form["search_type"] = "2"
+    return form
+
+
+def advocate_cause_list_form(
+    *,
+    state_code: str,
+    court_code: str = "1",
+    captcha: str,
+    bar_code: str,
+    causelist_date: str,
+) -> dict[str, str]:
+    """Build form data for an advocate's cause list on a given date.
+
+    This is ``search_type=3`` of the same advocate branch. Unlike the two
+    search modes it takes a fixed ``f=date_case_list`` rather than a
+    pending/disposed filter, and it requires a bar code — advocate name is
+    not accepted for this mode.
+
+    Note: the portal rejects dates more than one month ahead
+    (``checkDateInpuWithNextMonth``).
+
+    Args:
+        state_code: HC state code from courts registry.
+        court_code: Bench code from fillHCBench (default "1" = principal).
+        captcha: Solved CAPTCHA text.
+        bar_code: Bar registration number, e.g. "G/504/2011".
+        causelist_date: Listing date as ``DD-MM-YYYY``.
+    """
+    return {
+        "court_code": court_code,
+        "state_code": state_code,
+        "court_complex_code": court_code,
+        "caseStatusSearchType": "CSAdvName",
+        "captcha": captcha,
+        "adv_bar_state": bar_code,
+        "caselist_date_dmy": causelist_date,
+        "search_type": "3",
+        "f": "date_case_list",
+    }
+
+
+def case_status_by_cnr_form(*, cnr: str, captcha: str) -> dict[str, str]:
+    """Build form data for a CNR lookup.
+
+    Derived from the portal's ``funViewCinoHistory()``. Unlike every other
+    search this takes no state or bench code — a CNR identifies the court on
+    its own — and it answers with the full case-history page rather than the
+    JSON envelope the other searches use.
+
+    Note: ``caseStatusSearchType=CNRNumber`` must accompany the action code;
+    without it the server replies ``ERROR_caseStatusSearchTypeBlank``.
+
+    Args:
+        cnr: 16-character CNR, no hyphens or spaces.
+        captcha: Solved CAPTCHA text.
+    """
+    return {
+        "cino": cnr.strip().upper(),
+        "captcha": captcha,
+        "appFlag": "web",
+        "action_code": "fetchStateDistCourtNew",
+        "caseStatusSearchType": "CNRNumber",
+    }
+
+
 def court_orders_form(
     *,
     state_code: str,
