@@ -20,7 +20,13 @@ from datetime import date, datetime
 
 from bs4 import BeautifulSoup, Tag
 
-from bharat_courts.models import CaseInfo, CaseOrder, CauseListEntry, CauseListPDF
+from bharat_courts.models import (
+    AdvocateSearch,
+    CaseInfo,
+    CaseOrder,
+    CauseListEntry,
+    CauseListPDF,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +168,36 @@ def parse_case_status(raw: str) -> list[CaseInfo]:
 
     logger.info("Parsed %d/%d case status records", len(results), total)
     return results
+
+
+#: "MR. HEMAL SHAH(6960)" — name, then the portal's internal advocate id.
+_ADV_ECHO_RE = re.compile(r"^(.*?)\s*\((\d+)\)\s*$")
+
+
+def parse_advocate_search(raw: str) -> AdvocateSearch:
+    """Parse an advocate search, keeping the advocate the portal matched.
+
+    :func:`parse_case_status` discards the envelope, which is where the only
+    confirmation of a bar code lives. Nothing else validates one — the
+    portal's form takes the state part as free text on both High Court and
+    district — so a mistyped code is not an error, just a search that finds
+    nothing. The echo is what separates "this advocate has no pending
+    matters" from "this bar code does not exist", and those need different
+    words in front of a lawyer who has just signed up.
+    """
+    envelope = json.loads(raw.encode().decode("utf-8-sig"))
+    echoed = _clean_text(envelope.get("adv_name") or "")
+    name, code = echoed, ""
+    m = _ADV_ECHO_RE.match(echoed)
+    if m:
+        name, code = m.group(1).strip(), m.group(2)
+    return AdvocateSearch(
+        raw_name=echoed,
+        name=name,
+        code=code,
+        total_records=int(envelope.get("totRecords") or 0),
+        cases=parse_case_status(raw),
+    )
 
 
 # ---------------------------------------------------------------------------

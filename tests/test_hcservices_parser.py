@@ -257,3 +257,47 @@ def test_advocate_cause_list_carries_both_dates(hcservices_advocate_cause_list_j
     assert first.listing_date == date(2026, 8, 17)
     assert first.business_date == date(2026, 8, 13)
     assert first.listing_date != first.business_date
+
+
+# The envelope echoes back who the portal matched, and nothing else confirms
+# a bar code: both portals take its state part as free text, so a wrong one
+# is a search that finds nothing rather than an error.
+def test_advocate_search_keeps_who_the_portal_matched(hcservices_advocate_search_json):
+    from bharat_courts.hcservices.parser import parse_advocate_search
+
+    result = parse_advocate_search(hcservices_advocate_search_json)
+    assert result.found is True
+    assert result.raw_name == "PRIYA SHARMA"
+    assert result.total_records == 2
+    assert len(result.cases) == 2
+
+
+def test_a_bracketed_id_is_split_off_the_name():
+    import json
+
+    from bharat_courts.hcservices.parser import parse_advocate_search
+
+    raw = json.dumps({"con": ["[]"], "totRecords": 0,
+                      "adv_name": "MR. HEMAL SHAH(6960)"})
+    result = parse_advocate_search(raw)
+    assert result.name == "MR. HEMAL SHAH"
+    # The portal's internal advocate id — not a bar number, and not accepted
+    # as one.
+    assert result.code == "6960"
+
+
+# An advocate with nothing pending is not a bad bar code, and the two need
+# different words in front of a lawyer who has just signed up.
+def test_found_with_no_cases_is_distinguishable_from_not_found():
+    import json
+
+    from bharat_courts.hcservices.parser import parse_advocate_search
+
+    empty = parse_advocate_search(json.dumps({"con": ["[]"], "adv_name": ""}))
+    assert empty.found is False
+
+    quiet = parse_advocate_search(
+        json.dumps({"con": ["[]"], "adv_name": "MR. SOMEONE(1)"})
+    )
+    assert quiet.found is True
+    assert quiet.cases == []
