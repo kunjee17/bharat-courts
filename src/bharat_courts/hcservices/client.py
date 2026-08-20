@@ -26,12 +26,14 @@ from bharat_courts.hcservices import endpoints
 from bharat_courts.hcservices.parser import (
     CaptchaError,
     parse_advocate_cause_list,
+    parse_advocate_search,
     parse_case_status,
     parse_cause_list,
     parse_orders,
 )
 from bharat_courts.http import RateLimitedClient
 from bharat_courts.models import (
+    AdvocateSearch,
     CaseDetail,
     CaseInfo,
     CaseOrder,
@@ -279,6 +281,56 @@ class HCServicesClient:
         for r in results:
             r.court_name = court.name
         return results
+
+    async def advocate_search(
+        self,
+        court: Court,
+        *,
+        advocate_name: str | None = None,
+        bar_code: str | None = None,
+        bench_code: str = "1",
+        status_filter: str = "Both",
+    ) -> AdvocateSearch:
+        """Search an advocate's cases, keeping who the portal matched.
+
+        The same request as :meth:`case_status_by_advocate`, but it returns
+        the advocate the portal resolved the query to alongside the cases —
+        ``G/504/2011`` comes back as ``MR. HEMAL SHAH(6960)``.
+
+        That echo is the positive confirmation a bar code is real, and it is
+        worth having because "you have no pending matters" reads very
+        differently from "that bar number does not exist" to someone who has
+        just signed up.
+
+        Measured live: ``G/504/2011`` answered ``found=True``,
+        ``name="MR. HEMAL SHAH"``, ``code="6960"``, 2,704 rows, while
+        ``G/999999/1999`` raised ``ServerError: ERROR_VAL``.
+
+        **The negative signal is ambiguous, though.** ``ERROR_VAL`` is also
+        what a transient refusal looks like — a seeding run saw two dates
+        fail that had answered minutes earlier — so a single error does not
+        prove a bar code wrong. Retry before telling a lawyer their number is
+        invalid; only ``.found`` is unambiguous.
+
+        Returns:
+            An :class:`AdvocateSearch`. Check ``.found`` before ``.cases``.
+        """
+
+        def build_form(captcha: str) -> dict:
+            return endpoints.case_status_by_advocate_form(
+                state_code=court.state_code,
+                court_code=bench_code,
+                captcha=captcha,
+                advocate_name=advocate_name,
+                bar_code=bar_code,
+                status_filter=status_filter,
+            )
+
+        resp = await self._post_with_captcha_retry(endpoints.SHOW_RECORDS_URL, build_form)
+        result = parse_advocate_search(resp.text)
+        for r in result.cases:
+            r.court_name = court.name
+        return result
 
     async def advocate_cause_list(
         self,
