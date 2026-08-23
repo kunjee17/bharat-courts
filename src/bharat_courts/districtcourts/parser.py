@@ -50,6 +50,17 @@ class InvalidRequestError(ServerError):
     """
 
 
+class MalformedResponseError(ServerError):
+    """Raised when the portal answers with an empty or non-JSON body.
+
+    The portal does this fairly often on search endpoints (e.g. a plain empty
+    string from ``casestatus/submitPartyName``). It is a transient server-side
+    failure, not a "no results" answer — ``_post_with_captcha_retry`` treats
+    it like a failed CAPTCHA and retries with a fresh session, so it must
+    never be swallowed into a fabricated empty-success dict (#26).
+    """
+
+
 #: The portal's generic rejection text. Deliberately loose — the message has
 #: already drifted once ("wrong..!!!" → "wrong.....!!!" plus a trailing "go
 #: Home Page" link), so match on the stable phrase only.
@@ -110,6 +121,9 @@ def parse_ajax_response(raw: str) -> dict:
         CaptchaError: If status is 0, or the errormsg reports a bad CAPTCHA.
         InvalidRequestError: If the portal returned its generic "Invalid
             Request" rejection (usually a stale ``delimeter`` header).
+        MalformedResponseError: If the body is empty or not a JSON object \u2014
+            a transient portal failure that callers should retry, never a
+            "0 results" answer.
         ServerError: If any other errormsg is present.
     """
     text = raw.strip().lstrip("\ufeff")
@@ -124,12 +138,16 @@ def parse_ajax_response(raw: str) -> dict:
     try:
         data = json.loads(text, strict=False)
     except json.JSONDecodeError:
-        # Some responses are HTML, not JSON
+        # Empty bodies and stray HTML both land here. Returning a fake
+        # {"status": 0} dict made these indistinguishable from a genuine
+        # empty result downstream (#26) \u2014 raise so the caller retries.
         logger.warning("Non-JSON response: %s...", text[:200])
-        return {"status": 0, "raw": text}
+        raise MalformedResponseError(
+            f"Portal returned a non-JSON body ({len(text)} chars): {text[:200]!r}"
+        ) from None
 
     if not isinstance(data, dict):
-        return {"status": 0, "raw": text}
+        raise MalformedResponseError(f"Portal returned non-object JSON: {text[:200]!r}")
 
     # Check for errors
     errormsg = data.get("errormsg")
@@ -167,6 +185,26 @@ def parse_option_tags(html: str) -> dict[str, str]:
             continue
         result[value] = text
     return result
+
+
+def parse_state_options(page_html: str) -> dict[str, str]:
+    """Parse the ``sess_state_code`` state dropdown from a portal page.
+
+    The state codes are portal-internal identifiers with no external
+    authority, and they have drifted from any bundled snapshot before (#25) —
+    so the live dropdown is the source of truth.
+
+    Returns:
+        Dict mapping state code to state name, empty if the dropdown
+        isn't present in the page.
+    """
+    soup = BeautifulSoup(page_html, "lxml")
+    select = soup.find("select", id="sess_state_code") or soup.find(
+        "select", attrs={"name": "sess_state_code"}
+    )
+    if select is None:
+        return {}
+    return parse_option_tags(str(select))
 
 
 def parse_complex_value(value: str) -> tuple[str, list[str], bool]:

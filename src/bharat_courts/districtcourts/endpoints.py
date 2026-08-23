@@ -137,40 +137,47 @@ def ajax_headers(delimeter: str, spec: dict[str, str | None] | None = None) -> d
     return headers
 
 
-# State codes for district courts (from portal dropdown)
+# State codes for district courts. These are portal-internal identifiers with
+# no external authority — they do NOT match the High Court state codes in
+# courts.py, and they have drifted wholesale before (13/36 entries went stale,
+# #25: Delhi was "7", which the live portal reassigned to Jharkhand — so the
+# wrong code returned *plausible* data for the wrong state). This dict is only
+# the offline fallback; ``DistrictCourtClient.list_states()`` scrapes the live
+# ``sess_state_code`` dropdown, which is the source of truth.
+# Snapshot verified against the live portal on 2026-08-23.
 DISTRICT_STATES: dict[str, str] = {
     "Andaman and Nicobar": "28",
     "Andhra Pradesh": "2",
     "Arunachal Pradesh": "36",
     "Assam": "6",
     "Bihar": "8",
-    "Chandigarh": "32",
+    "Chandigarh": "27",
     "Chhattisgarh": "18",
-    "Delhi": "7",
-    "Goa": "37",
+    "Delhi": "26",
+    "Goa": "30",
     "Gujarat": "17",
-    "Haryana": "10",
+    "Haryana": "14",
     "Himachal Pradesh": "5",
     "Jammu and Kashmir": "12",
-    "Jharkhand": "33",
+    "Jharkhand": "7",
     "Karnataka": "3",
     "Kerala": "4",
-    "Ladakh": "38",
-    "Lakshadweep": "35",
+    "Ladakh": "33",
+    "Lakshadweep": "37",
     "Madhya Pradesh": "23",
-    "Maharashtra": "27",
+    "Maharashtra": "1",
     "Manipur": "25",
     "Meghalaya": "21",
-    "Mizoram": "34",
-    "Nagaland": "39",
+    "Mizoram": "19",
+    "Nagaland": "34",
     "Odisha": "11",
-    "Puducherry": "31",
+    "Puducherry": "35",
     "Punjab": "22",
     "Rajasthan": "9",
     "Sikkim": "24",
-    "Tamil Nadu": "30",
+    "Tamil Nadu": "10",
     "Telangana": "29",
-    "The Dadra And Nagar Haveli And Daman And Diu": "40",
+    "The Dadra And Nagar Haveli And Daman And Diu": "38",
     "Tripura": "20",
     "Uttarakhand": "15",
     "Uttar Pradesh": "13",

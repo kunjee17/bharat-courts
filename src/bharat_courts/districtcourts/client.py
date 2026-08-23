@@ -38,11 +38,14 @@ from bharat_courts.districtcourts import endpoints
 from bharat_courts.districtcourts.parser import (
     CaptchaError,
     InvalidRequestError,
+    MalformedResponseError,
     parse_ajax_response,
     parse_case_status_html,
     parse_cause_list_html,
+    parse_complex_value,
     parse_court_orders_html,
     parse_option_tags,
+    parse_state_options,
 )
 from bharat_courts.http import RateLimitedClient
 from bharat_courts.models import CaseDetail, CaseInfo, CaseOrder, CauseListEntry
@@ -90,6 +93,19 @@ class DistrictCourtClient:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _bare_complex_code(court_complex_code: str) -> str:
+        """Reduce a complex code to the bare form the server expects.
+
+        :meth:`list_complexes` keys are full dropdown values like
+        ``"1260008@5,6,7@N"``, but the portal's own JS splits off everything
+        after the first ``@`` before submitting. Sending the value unsplit
+        makes the server answer with an *empty body* — which used to read as
+        "0 results" (#26) and made whole complexes look unqueryable (#28).
+        Accept either form so dropdown values can be passed straight through.
+        """
+        return parse_complex_value(court_complex_code)[0]
 
     def _anti_bot_state(self) -> tuple:
         """Snapshot of everything the anti-bot headers derive from.
@@ -256,6 +272,7 @@ class DistrictCourtClient:
         Raises:
             CaptchaError: If all retries fail.
         """
+        last_error: Exception | None = None
         for attempt in range(max_retries):
             if attempt > 0:
                 logger.info("CAPTCHA retry %d/%d — new session", attempt + 1, max_retries)
@@ -271,15 +288,32 @@ class DistrictCourtClient:
 
             # Solve CAPTCHA and submit
             captcha = await self._solve_captcha()
+            if not captcha:
+                # The OCR solver discards unusable decodes (wrong length /
+                # non-alphanumeric). Sending an empty CAPTCHA would only earn
+                # a server-side rejection, so skip straight to a new session.
+                logger.warning("CAPTCHA attempt %d skipped (solver returned empty)", attempt + 1)
+                continue
             form = form_builder(captcha)
 
             try:
                 result = await self._post_ajax(controller_action, form)
                 return result
-            except CaptchaError:
+            except CaptchaError as exc:
+                last_error = exc
                 logger.warning("CAPTCHA attempt %d failed", attempt + 1)
                 continue
+            except MalformedResponseError as exc:
+                # Empty/non-JSON body — a transient portal failure, not "0
+                # results" (#26). A fresh session usually clears it.
+                last_error = exc
+                logger.warning(
+                    "Attempt %d got a malformed response, retrying: %s", attempt + 1, exc
+                )
+                continue
 
+        if isinstance(last_error, MalformedResponseError):
+            raise last_error
         raise CaptchaError(f"CAPTCHA failed after {max_retries} attempts")
 
     # ------------------------------------------------------------------
@@ -289,10 +323,27 @@ class DistrictCourtClient:
     async def list_states(self) -> dict[str, str]:
         """Get available states/UTs.
 
+        Scraped live from the portal's ``sess_state_code`` dropdown — the
+        codes are portal-internal and have drifted before (13 of 36 entries
+        went stale between releases, silently mapping e.g. Delhi to
+        Jharkhand's districts, #25). Falls back to the bundled
+        :data:`~bharat_courts.districtcourts.endpoints.DISTRICT_STATES`
+        snapshot only if the page can't be fetched or parsed.
+
         Returns:
             Dict mapping state code to state name.
         """
-        # States are static, from the portal dropdown
+        try:
+            html = await self._http.get_text(
+                endpoints.ajax_url("casestatus/index"),
+                headers={"Referer": endpoints.BASE_URL + "/"},
+            )
+            states = parse_state_options(html)
+        except Exception as e:
+            logger.warning("Could not scrape live state list, using bundled snapshot: %s", e)
+            states = {}
+        if states:
+            return states
         return {v: k for k, v in endpoints.DISTRICT_STATES.items()}
 
     async def list_districts(self, state_code: str) -> dict[str, str]:
@@ -351,6 +402,7 @@ class DistrictCourtClient:
         Returns:
             Dict mapping establishment code to name.
         """
+        court_complex_code = self._bare_complex_code(court_complex_code)
         await self._init_session()
         form = endpoints.fill_establishment_form(
             state_code=state_code,
@@ -377,6 +429,7 @@ class DistrictCourtClient:
         directly to :meth:`cause_list`, which will look up the matching
         name automatically.
         """
+        court_complex_code = self._bare_complex_code(court_complex_code)
         await self._init_session()
         form = endpoints.fill_cause_list_form(
             state_code=state_code,
@@ -410,6 +463,7 @@ class DistrictCourtClient:
             string back as ``case_type`` to :meth:`case_status` /
             :meth:`court_orders`; do not strip the suffix.
         """
+        court_complex_code = self._bare_complex_code(court_complex_code)
         await self._init_session()
         await self._setup_court(
             state_code=state_code,
@@ -464,12 +518,15 @@ class DistrictCourtClient:
                 logger.info("CAPTCHA retry %d/5 — new session", attempt + 1)
             await self._init_session()
             captcha = await self._solve_captcha()
+            if not captcha:
+                logger.warning("CAPTCHA attempt %d skipped (solver returned empty)", attempt + 1)
+                continue
             form = endpoints.case_status_by_cnr_form(cnr=cleaned, captcha=captcha)
             try:
                 result = await self._post_ajax("cnr_status/searchByCNR", form)
-            except CaptchaError as exc:
+            except (CaptchaError, MalformedResponseError) as exc:
                 last_error = exc
-                logger.warning("CAPTCHA attempt %d failed", attempt + 1)
+                logger.warning("CAPTCHA attempt %d failed: %s", attempt + 1, exc)
                 continue
             html = result.get("casetype_list") or result.get("historytable") or ""
             if html:
@@ -503,6 +560,7 @@ class DistrictCourtClient:
         Returns:
             List of matching CaseInfo objects.
         """
+        court_complex_code = self._bare_complex_code(court_complex_code)
 
         def build_form(captcha: str) -> dict:
             return endpoints.case_status_by_number_form(
@@ -552,6 +610,7 @@ class DistrictCourtClient:
         Returns:
             List of matching CaseInfo objects.
         """
+        court_complex_code = self._bare_complex_code(court_complex_code)
 
         def build_form(captcha: str) -> dict:
             return endpoints.case_status_by_party_form(
@@ -605,6 +664,7 @@ class DistrictCourtClient:
         Returns:
             List of CaseOrder objects.
         """
+        court_complex_code = self._bare_complex_code(court_complex_code)
 
         def build_form(captcha: str) -> dict:
             return endpoints.court_orders_by_number_form(
@@ -666,6 +726,7 @@ class DistrictCourtClient:
         Returns:
             List of CauseListEntry objects.
         """
+        court_complex_code = self._bare_complex_code(court_complex_code)
         if not court_name:
             mapping = await self.list_cause_list_courts(
                 state_code, dist_code, court_complex_code, est_code

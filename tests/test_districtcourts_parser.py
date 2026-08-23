@@ -14,6 +14,7 @@ from bharat_courts.districtcourts.endpoints import (
 from bharat_courts.districtcourts.parser import (
     CaptchaError,
     InvalidRequestError,
+    MalformedResponseError,
     ServerError,
     parse_ajax_response,
     parse_case_status_html,
@@ -21,6 +22,7 @@ from bharat_courts.districtcourts.parser import (
     parse_complex_value,
     parse_court_orders_html,
     parse_option_tags,
+    parse_state_options,
 )
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -93,10 +95,31 @@ def test_parse_ajax_response_with_bom():
     assert result["app_token"] == "tok1"
 
 
-def test_parse_ajax_response_non_json():
-    raw = "<html>error page</html>"
-    result = parse_ajax_response(raw)
-    assert result["status"] == 0
+# The portal answers search endpoints with a plain empty string (or stray
+# HTML) fairly often. Returning a fake {"status": 0} dict here made that
+# indistinguishable from "0 matching cases" downstream (#26) — it must raise
+# a retryable error instead.
+
+
+def test_parse_ajax_response_non_json_raises():
+    with pytest.raises(MalformedResponseError):
+        parse_ajax_response("<html>error page</html>")
+
+
+def test_parse_ajax_response_empty_body_raises():
+    with pytest.raises(MalformedResponseError):
+        parse_ajax_response("")
+
+
+def test_parse_ajax_response_non_object_json_raises():
+    with pytest.raises(MalformedResponseError):
+        parse_ajax_response("[1, 2, 3]")
+
+
+def test_malformed_response_still_caught_as_server_error():
+    """Existing callers that catch ServerError keep working."""
+    with pytest.raises(ServerError):
+        parse_ajax_response("")
 
 
 # ------------------------------------------------------------------
@@ -127,6 +150,33 @@ def test_parse_option_tags_complexes():
     assert len(result) == 3
     assert "1080010@2,3,4@Y" in result
     assert result["1080010@2,3,4@Y"] == "Civil Court, Patna Sadar"
+
+
+# ------------------------------------------------------------------
+# State dropdown parsing (#25 — codes drift; the live dropdown is truth)
+# ------------------------------------------------------------------
+
+_STATE_PAGE = """
+<html><body>
+<select name='sess_state_code' id='sess_state_code' onchange='fillDistrict(this.value);'>
+<option value='0'>Select state</option>
+<option value='26'  >Delhi</option>
+<option value='7'  >Jharkhand</option>
+<option value='1'  >Maharashtra</option>
+</select>
+<select id='sess_dist_code'><option value='9'>Decoy</option></select>
+</body></html>
+"""
+
+
+def test_parse_state_options():
+    states = parse_state_options(_STATE_PAGE)
+    # only the state dropdown, not the district decoy; placeholder filtered
+    assert states == {"26": "Delhi", "7": "Jharkhand", "1": "Maharashtra"}
+
+
+def test_parse_state_options_missing_dropdown():
+    assert parse_state_options("<html><body>maintenance page</body></html>") == {}
 
 
 # ------------------------------------------------------------------
