@@ -183,9 +183,7 @@ def _history(soup: BeautifulSoup) -> list[HearingEntry]:
     out: list[HearingEntry] = []
     rows = [r for t in tables for r in t.find_all("tr") if r.find_parent("table") is t]
     for row in rows:
-        cells = [
-            _text(c) for c in row.find_all(["td", "th"]) if c.find_parent("tr") is row
-        ]
+        cells = [_text(c) for c in row.find_all(["td", "th"]) if c.find_parent("tr") is row]
         if not cells or not any(cells):
             continue
         # High Court prints a header row per table; district prints none.
