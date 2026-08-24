@@ -58,6 +58,74 @@ async def test_case_status(fast_config, captcha_solver):
 
 
 # ------------------------------------------------------------------
+# Empty CAPTCHA decodes never reach the wire (#5)
+# ------------------------------------------------------------------
+
+
+class FlakyCaptchaSolver(CaptchaSolver):
+    """Returns unusable decodes for the first ``bad`` calls, then a good one.
+
+    Mirrors OCRCaptchaSolver's contract: an unusable decode (wrong length,
+    non-alphanumeric) comes back as an empty string.
+    """
+
+    def __init__(self, bad: int):
+        self.bad = bad
+        self.calls = 0
+
+    async def solve(self, image_bytes: bytes) -> str:
+        self.calls += 1
+        return "" if self.calls <= self.bad else "test123"
+
+
+@pytest.mark.asyncio
+async def test_empty_captcha_skips_post_and_retries(fast_config):
+    """An empty solver result must not be POSTed — the portal answers it with
+    ERROR_VAL, which the retry loop doesn't catch, failing the whole call on
+    one bad OCR read (#5). The attempt is skipped and a fresh session tried."""
+    fixture_html = (FIXTURES_DIR / "hcservices_case_status.html").read_text()
+    delhi = get_court("delhi")
+    solver = FlakyCaptchaSolver(bad=2)
+
+    with respx.mock:
+        respx.get(MAIN_PAGE_URL).mock(return_value=Response(200, text="<html></html>"))
+        respx.get(CAPTCHA_IMAGE_URL).mock(return_value=Response(200, content=b"fake_captcha_image"))
+        search = respx.post(url__startswith=INDEX_QRY_URL).mock(
+            return_value=Response(200, text=fixture_html)
+        )
+
+        async with HCServicesClient(config=fast_config, captcha_solver=solver) as client:
+            results = await client.case_status(
+                delhi, case_type="WP(C)", case_number="12345", year="2024"
+            )
+
+    assert len(results) == 2
+    assert solver.calls == 3
+    assert search.call_count == 1, "empty CAPTCHAs must never be sent to the portal"
+
+
+@pytest.mark.asyncio
+async def test_all_empty_captchas_raise_captcha_error(fast_config):
+    from bharat_courts.hcservices.parser import CaptchaError
+
+    delhi = get_court("delhi")
+    solver = FlakyCaptchaSolver(bad=99)
+
+    with respx.mock:
+        respx.get(MAIN_PAGE_URL).mock(return_value=Response(200, text="<html></html>"))
+        respx.get(CAPTCHA_IMAGE_URL).mock(return_value=Response(200, content=b"fake_captcha_image"))
+        search = respx.post(url__startswith=INDEX_QRY_URL).mock(
+            return_value=Response(200, text="should never be reached")
+        )
+
+        async with HCServicesClient(config=fast_config, captcha_solver=solver) as client:
+            with pytest.raises(CaptchaError):
+                await client.case_status(delhi, case_type="WP(C)", case_number="12345", year="2024")
+
+    assert search.call_count == 0
+
+
+# ------------------------------------------------------------------
 # Advocate form builders
 # ------------------------------------------------------------------
 

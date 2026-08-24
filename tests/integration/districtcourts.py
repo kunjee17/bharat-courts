@@ -78,23 +78,42 @@ results: list[TestResult] = []
 # --- Test Functions ---
 
 
-def test_list_states():
-    """Test 1: Static state list."""
-    t = TestResult("List States (offline)")
+async def test_list_states():
+    """Test 1: Live state list + drift check against the bundled snapshot.
+
+    The portal's state codes are internal and have drifted wholesale before
+    (13/36 stale, #25) — so this doubles as a drift alarm: if the live
+    dropdown ever disagrees with DISTRICT_STATES, this test fails and the
+    snapshot needs re-verifying.
+    """
+    t = TestResult("List States (live + snapshot drift check)")
     try:
+        from bharat_courts.districtcourts.client import DistrictCourtClient
         from bharat_courts.districtcourts.endpoints import DISTRICT_STATES
 
-        t.details["total_states"] = len(DISTRICT_STATES)
-        t.details["bihar_code"] = DISTRICT_STATES.get("Bihar")
-        t.details["delhi_code"] = DISTRICT_STATES.get("Delhi")
+        async with DistrictCourtClient(captcha_solver=solver) as client:
+            live = await client.list_states()
 
-        assert len(DISTRICT_STATES) == 36
-        assert DISTRICT_STATES["Bihar"] == "8"
-        assert DISTRICT_STATES["Delhi"] == "7"
+        t.details["total_states"] = len(live)
+        t.details["delhi_code"] = next((k for k, v in live.items() if v == "Delhi"), None)
+
+        assert len(live) >= 36, f"Too few states: {len(live)}"
+        assert live.get("26") == "Delhi"
+        assert live.get("8") == "Bihar"
+
+        snapshot = {v: k for k, v in DISTRICT_STATES.items()}
+        drift = {
+            code: (name, snapshot.get(code))
+            for code, name in live.items()
+            if snapshot.get(code) != name
+        }
+        t.details["drift"] = drift or "none"
+        assert not drift, f"DISTRICT_STATES snapshot has drifted from the live portal: {drift}"
 
         t.passed = True
     except Exception as e:
-        t.error = str(e)
+        t.error = f"{type(e).__name__}: {e}"
+        traceback.print_exc()
     results.append(t)
 
 

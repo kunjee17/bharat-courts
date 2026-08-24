@@ -125,6 +125,13 @@ class HCServicesClient:
                 logger.info("CAPTCHA retry %d/%d — new session", attempt + 1, max_retries)
             await self._init_session()
             captcha = await self._solve_captcha()
+            if not captcha:
+                # The OCR solver discards unusable decodes (wrong length /
+                # non-alphanumeric). Sending one anyway earns ERROR_VAL, which
+                # this loop doesn't retry on — the whole call then fails on a
+                # single bad OCR read (#5). Skip straight to a fresh session.
+                logger.warning("CAPTCHA attempt %d skipped (solver returned empty)", attempt + 1)
+                continue
             form = form_builder(captcha)
             resp = await self._http.post(
                 url,

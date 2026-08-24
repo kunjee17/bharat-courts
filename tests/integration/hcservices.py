@@ -153,6 +153,35 @@ async def test_case_type_listing():
     results.append(t)
 
 
+def _cause_list_candidate_dates() -> list:
+    """Dates worth asking for a cause list on.
+
+    No list is published for a Sunday (or most Saturdays / holidays), so a
+    bare "today" query legitimately returns 0 PDFs on those days — which is
+    exactly how the parser being broken would also look (#29). Ask for
+    today, the next working day (boards are published a day or two ahead),
+    and the previous working day (past lists stay available), and treat a
+    hit on any of them as proof the pipeline works.
+    """
+    from datetime import date, timedelta
+
+    today = date.today()
+    candidates = [today]
+    step = today
+    while True:  # next working day
+        step += timedelta(days=1)
+        if step.weekday() < 5:
+            candidates.append(step)
+            break
+    step = today
+    while True:  # previous working day
+        step -= timedelta(days=1)
+        if step.weekday() < 5:
+            candidates.append(step)
+            break
+    return candidates
+
+
 async def test_cause_list():
     """Test 4: Cause list PDFs with CAPTCHA (auto-retry)."""
     t = TestResult("Cause List PDFs (Delhi HC, civil)")
@@ -164,9 +193,14 @@ async def test_cause_list():
         solver = OCRCaptchaSolver()
         async with HCServicesClient(captcha_solver=solver) as client:
             delhi = get_court("delhi")
-            pdfs = await client.cause_list(delhi, civil=True)
+            pdfs = []
+            for candidate in _cause_list_candidate_dates():
+                date_str = candidate.strftime("%d-%m-%Y")
+                pdfs = await client.cause_list(delhi, civil=True, causelist_date=date_str)
+                t.details[f"pdf_count[{date_str}]"] = len(pdfs)
+                if pdfs:
+                    break
 
-            t.details["pdf_count"] = len(pdfs)
             if pdfs:
                 first = pdfs[0]
                 t.details["first_bench"] = first.bench[:60]

@@ -259,16 +259,19 @@ async def test_app_token_rotation(fast_config, captcha_solver):
 
 
 @pytest.mark.asyncio
-async def test_list_states(fast_config, captcha_solver):
-    """list_states returns the static state code mapping."""
-    async with DistrictCourtClient(config=fast_config, captcha_solver=captcha_solver) as client:
-        states = await client.list_states()
+async def test_bundled_state_snapshot():
+    """The offline DISTRICT_STATES snapshot must carry the codes verified
+    against the live portal on 2026-08-23 (#25 — 13 of 36 had drifted,
+    with Delhi's old code "7" actually meaning Jharkhand)."""
+    from bharat_courts.districtcourts.endpoints import DISTRICT_STATES
 
-    assert "8" in states
-    assert states["8"] == "Bihar"
-    assert "7" in states
-    assert states["7"] == "Delhi"
-    assert len(states) == 36
+    assert len(DISTRICT_STATES) == 36
+    assert DISTRICT_STATES["Bihar"] == "8"
+    assert DISTRICT_STATES["Delhi"] == "26"
+    assert DISTRICT_STATES["Jharkhand"] == "7"
+    assert DISTRICT_STATES["Maharashtra"] == "1"
+    assert DISTRICT_STATES["Haryana"] == "14"
+    assert DISTRICT_STATES["Tamil Nadu"] == "10"
 
 
 # Regression tests for the field-name + court-name fixes (issue #3) ---------
@@ -659,3 +662,153 @@ async def test_cnr_lookup_rejects_malformed(bad):
     client = DistrictCourtClient()
     with pytest.raises(ValueError, match="16 alphanumeric"):
         await client.case_status_by_cnr(bad)
+
+
+# ------------------------------------------------------------------
+# Empty / non-JSON responses are retried, never "0 results" (#26)
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_empty_response_is_retried_then_succeeds(fast_config, captcha_solver):
+    """The portal fairly often answers submitPartyName with a plain empty
+    string. That used to sail through as a fabricated empty-success dict and
+    come out as "0 matching cases" (#26) — it must retry instead."""
+    case_html = (FIXTURES_DIR / "districtcourts_case_status.html").read_text()
+
+    with respx.mock:
+        _mock_session_init()
+        respx.post(url__regex=r".*getCaptcha").mock(
+            return_value=_ajax_response(div_captcha="<img>")
+        )
+        respx.post(url__regex=r".*set_data").mock(return_value=_ajax_response())
+        submit = respx.post(url__regex=r".*submitPartyName").mock(
+            side_effect=[
+                Response(200, text=""),  # transient portal blip
+                _ajax_response(party_data=case_html),
+            ]
+        )
+
+        async with DistrictCourtClient(config=fast_config, captcha_solver=captcha_solver) as client:
+            results = await client.case_status_by_party(
+                state_code="26",
+                dist_code="8",
+                court_complex_code="1260008@5,6,7@N",
+                party_name="Bank",
+                year="2023",
+            )
+
+    assert submit.call_count == 2
+    assert len(results) == 3, "the retry's real results must come through"
+
+
+@pytest.mark.asyncio
+async def test_persistent_empty_response_raises_not_zero_results(fast_config, captcha_solver):
+    from bharat_courts.districtcourts.parser import MalformedResponseError
+
+    with respx.mock:
+        _mock_session_init()
+        respx.post(url__regex=r".*getCaptcha").mock(
+            return_value=_ajax_response(div_captcha="<img>")
+        )
+        respx.post(url__regex=r".*set_data").mock(return_value=_ajax_response())
+        respx.post(url__regex=r".*submitPartyName").mock(return_value=Response(200, text=""))
+
+        async with DistrictCourtClient(config=fast_config, captcha_solver=captcha_solver) as client:
+            with pytest.raises(MalformedResponseError):
+                await client.case_status_by_party(
+                    state_code="26",
+                    dist_code="8",
+                    court_complex_code="1260008@5,6,7@N",
+                    party_name="Bank",
+                    year="2023",
+                )
+
+
+# ------------------------------------------------------------------
+# list_states scrapes the live dropdown (#25)
+# ------------------------------------------------------------------
+
+_STATE_PAGE = """
+<html><body>
+<select name='sess_state_code' id='sess_state_code'>
+<option value='0'>Select state</option>
+<option value='26'  >Delhi</option>
+<option value='1'  >Maharashtra</option>
+</select>
+</body></html>
+"""
+
+
+@pytest.mark.asyncio
+async def test_list_states_scrapes_live_dropdown(fast_config, captcha_solver):
+    with respx.mock:
+        respx.get(url__regex=r".*casestatus/index").mock(
+            return_value=Response(200, text=_STATE_PAGE)
+        )
+
+        async with DistrictCourtClient(config=fast_config, captcha_solver=captcha_solver) as client:
+            states = await client.list_states()
+
+    assert states == {"26": "Delhi", "1": "Maharashtra"}
+
+
+@pytest.mark.asyncio
+async def test_list_states_falls_back_to_snapshot(fast_config, captcha_solver):
+    """If the page can't be fetched, the bundled snapshot still answers —
+    and it must carry the corrected codes (#25: Delhi is 26, not 7)."""
+    with respx.mock:
+        respx.get(url__regex=r".*casestatus/index").mock(return_value=Response(503, text="down"))
+
+        async with DistrictCourtClient(config=fast_config, captcha_solver=captcha_solver) as client:
+            states = await client.list_states()
+
+    assert states["26"] == "Delhi"
+    assert states["7"] == "Jharkhand"
+    assert states["1"] == "Maharashtra"
+    assert states["10"] == "Tamil Nadu"
+
+
+# ------------------------------------------------------------------
+# Complex codes are reduced to the bare form the server expects (#26/#28)
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_full_dropdown_complex_value_is_normalised(fast_config, captcha_solver):
+    """list_complexes keys look like "1260008@5,6,7@N". The portal's own JS
+    splits off the @-suffix before submitting; sending it unsplit makes the
+    server answer with an empty body. Passing the dropdown value through
+    must put only the bare code on the wire."""
+    case_html = (FIXTURES_DIR / "districtcourts_case_status.html").read_text()
+
+    with respx.mock:
+        _mock_session_init()
+        respx.post(url__regex=r".*getCaptcha").mock(
+            return_value=_ajax_response(div_captcha="<img>")
+        )
+        set_data = respx.post(url__regex=r".*set_data").mock(return_value=_ajax_response())
+        submit = respx.post(url__regex=r".*submitPartyName").mock(
+            return_value=_ajax_response(party_data=case_html)
+        )
+
+        async with DistrictCourtClient(config=fast_config, captcha_solver=captcha_solver) as client:
+            results = await client.case_status_by_party(
+                state_code="26",
+                dist_code="8",
+                court_complex_code="1260008@5,6,7@N",
+                party_name="Bank",
+                year="2023",
+            )
+
+    assert len(results) == 3
+    submit_body = submit.calls.last.request.content.decode()
+    assert (
+        "court_complex_code=1260008&" in submit_body
+        or submit_body.endswith("court_complex_code=1260008")
+        or "court_complex_code=1260008" in submit_body
+    )
+    assert "%405%2C6%2C7%40N" not in submit_body, "@-suffix must not reach the wire"
+    set_body = set_data.calls.last.request.content.decode()
+    assert "court_complex_code=1260008" in set_body
+    assert "%40" not in set_body.split("court_complex_code=")[1].split("&")[0]
