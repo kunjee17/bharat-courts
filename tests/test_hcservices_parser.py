@@ -11,6 +11,7 @@ from bharat_courts.hcservices.parser import (
     CaptchaError,
     ServerError,
     dedupe_by_cnr,
+    is_captcha_rejection,
     parse_advocate_cause_list,
     parse_advocate_search,
     parse_case_status,
@@ -333,3 +334,36 @@ def test_the_response_is_decoded_once_not_twice(hcservices_advocate_search_json)
         parse_advocate_search(hcservices_advocate_search_json)
     envelope_and_inner = 2
     assert loads.call_count == envelope_and_inner
+
+
+# The retry loop quick-checks the response instead of parsing several MB, so
+# its verdict has to be the one _parse_json_envelope would reach. A rejection
+# it misses is a CaptchaError raised on attempt 1 with four retries unused.
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"con":"Invalid Captcha"}',
+        '{"con": "Invalid Captcha"}',
+        '{"con":"Wrong Captcha"}',
+        '{"con":"invalid captcha, try again"}',
+        '\ufeff{"con":"Invalid Captcha"}',
+    ],
+)
+def test_captcha_rejections_are_recognised_without_a_full_parse(raw):
+    assert is_captcha_rejection(raw) is True
+    with pytest.raises(CaptchaError):
+        parse_case_status(raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"con":["[{\\"cino\\": \\"GJHC240100012024\\"}]"],"totRecords":"1"}',
+        '{"con":[],"totRecords":"0","Error":""}',
+        # A captcha mentioned inside the rows is data, not a rejection.
+        '{"con":["[{\\"pet_name\\": \\"CAPTCHA SOLUTIONS PVT LTD\\"}]"],"totRecords":"1"}',
+        '{"con":[],"Error":"ERROR_VAL"}',
+    ],
+)
+def test_successful_responses_are_not_read_as_captcha_rejections(raw):
+    assert is_captcha_rejection(raw) is False

@@ -25,6 +25,7 @@ from bharat_courts.config import config as default_config
 from bharat_courts.hcservices import endpoints
 from bharat_courts.hcservices.parser import (
     CaptchaError,
+    is_captcha_rejection,
     parse_advocate_cause_list,
     parse_advocate_search,
     parse_case_status,
@@ -138,9 +139,11 @@ class HCServicesClient:
                 data=form,
                 headers={"Referer": endpoints.MAIN_PAGE_URL},
             )
-            # Quick-check for captcha error before full parse
-            text = resp.text.strip().lstrip("\ufeff")
-            if '"Invalid Captcha"' in text or '"con":"Invalid Captcha"' in text:
+            # Quick-check for captcha error before full parse. Uses the same
+            # condition the parser raises CaptchaError on, so a reworded
+            # rejection is retried here rather than escaping as an exception
+            # with every remaining attempt unused.
+            if is_captcha_rejection(resp.text):
                 logger.warning("CAPTCHA attempt %d failed (invalid)", attempt + 1)
                 continue
             return resp
@@ -313,7 +316,14 @@ class HCServicesClient:
 
         Returns:
             An :class:`AdvocateSearch`. Check ``.found`` before ``.cases``.
+
+        Raises:
+            ValueError: If neither or both of advocate_name / bar_code given.
         """
+        # Before the session and the CAPTCHA solve, not inside the retry
+        # loop's form_builder — a manual solver blocks on a human at that
+        # point, and the request was never going to be buildable.
+        endpoints.validate_advocate_query(advocate_name, bar_code)
 
         def build_form(captcha: str) -> dict:
             return endpoints.case_status_by_advocate_form(

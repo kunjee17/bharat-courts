@@ -132,6 +132,27 @@ def _parse_json_envelope(raw: str) -> tuple[list[dict], int, dict]:
     return [], 0, {}
 
 
+#: ``{"con": "Invalid Captcha"}`` — but the wording drifts, so match any
+#: ``con`` *string* mentioning a captcha, which is exactly what
+#: :func:`_parse_json_envelope` raises :class:`CaptchaError` on. A successful
+#: response carries ``"con": [...]``, a list, so it can never match.
+_CAPTCHA_REJECTION_RE = re.compile(r'"con"\s*:\s*"[^"]*captcha', re.IGNORECASE)
+
+
+def is_captcha_rejection(raw: str) -> bool:
+    """Whether a showRecords response is the server refusing the CAPTCHA.
+
+    The retry loop needs this verdict without paying for a full parse — a
+    live advocate search answers with several MB — and it has to agree with
+    :func:`_parse_json_envelope`. A quick-check that knows only the literal
+    "Invalid Captcha" lets a reworded rejection through as a success; the
+    parse then raises :class:`CaptchaError` on the first attempt with every
+    remaining retry unused, and this portal's error wording has drifted
+    before.
+    """
+    return bool(_CAPTCHA_REJECTION_RE.search(raw))
+
+
 # ---------------------------------------------------------------------------
 # Case status — JSON-based
 # ---------------------------------------------------------------------------
