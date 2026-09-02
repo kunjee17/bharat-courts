@@ -223,6 +223,18 @@ class AdvocateSearch(_Serializable):
         """
         return bool(self.raw_name)
 
+    def to_dict(self, *, exclude_none: bool = False) -> dict[str, Any]:
+        """Override to carry ``found`` through serialization.
+
+        It is a property, so the field-walking base implementation would drop
+        the one flag this class exists to expose and leave every JSON
+        consumer recomputing it. Same reason :class:`SearchResult` overrides
+        for ``total_pages``.
+        """
+        result = super().to_dict(exclude_none=exclude_none)
+        result["found"] = self.found
+        return result
+
 
 @dataclass
 class PartyEntry(_Serializable):

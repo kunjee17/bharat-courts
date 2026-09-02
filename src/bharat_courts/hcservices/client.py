@@ -264,23 +264,21 @@ class HCServicesClient:
 
         Raises:
             ValueError: If neither or both of advocate_name / bar_code given.
+
+        See also:
+            :meth:`advocate_search`, the same request kept whole. This is a
+            thin view over it — call that one directly if you also need to
+            know *whether* the portal recognised the advocate, rather than
+            spending a second session and CAPTCHA solve to find out.
         """
-
-        def build_form(captcha: str) -> dict:
-            return endpoints.case_status_by_advocate_form(
-                state_code=court.state_code,
-                court_code=bench_code,
-                captcha=captcha,
-                advocate_name=advocate_name,
-                bar_code=bar_code,
-                status_filter=status_filter,
-            )
-
-        resp = await self._post_with_captcha_retry(endpoints.SHOW_RECORDS_URL, build_form)
-        results = parse_case_status(resp.text)
-        for r in results:
-            r.court_name = court.name
-        return results
+        result = await self.advocate_search(
+            court,
+            advocate_name=advocate_name,
+            bar_code=bar_code,
+            bench_code=bench_code,
+            status_filter=status_filter,
+        )
+        return result.cases
 
     async def advocate_search(
         self,
@@ -293,9 +291,10 @@ class HCServicesClient:
     ) -> AdvocateSearch:
         """Search an advocate's cases, keeping who the portal matched.
 
-        The same request as :meth:`case_status_by_advocate`, but it returns
-        the advocate the portal resolved the query to alongside the cases —
-        ``G/504/2011`` comes back as ``MR. HEMAL SHAH(6960)``.
+        The whole of the :meth:`case_status_by_advocate` request — that
+        method is now a view over this one, returning only ``.cases`` — so
+        the advocate the portal resolved the query to survives alongside the
+        cases: ``G/504/2011`` comes back as ``MR. HEMAL SHAH(6960)``.
 
         That echo is the positive confirmation a bar code is real, and it is
         worth having because "you have no pending matters" reads very

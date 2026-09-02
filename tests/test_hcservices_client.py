@@ -163,6 +163,30 @@ def test_advocate_form_requires_exactly_one_selector(kwargs):
         endpoints.case_status_by_advocate_form(state_code="17", captcha="abc123", **kwargs)
 
 
+@pytest.mark.asyncio
+async def test_case_status_by_advocate_is_a_view_over_advocate_search(fast_config, captcha_solver):
+    """One request, two shapes — so the retry/annotation logic cannot drift."""
+    fixture_json = (FIXTURES_DIR / "hcservices_advocate_search.json").read_text()
+    gujarat = get_court("gujarat")
+
+    with respx.mock:
+        respx.get(MAIN_PAGE_URL).mock(return_value=Response(200, text="<html></html>"))
+        respx.get(CAPTCHA_IMAGE_URL).mock(return_value=Response(200, content=b"fake_captcha_image"))
+        respx.post(url__startswith=INDEX_QRY_URL).mock(
+            return_value=Response(200, text=fixture_json)
+        )
+
+        async with HCServicesClient(config=fast_config, captcha_solver=captcha_solver) as client:
+            full = await client.advocate_search(gujarat, bar_code="G/504/2011")
+            cases = await client.case_status_by_advocate(gujarat, bar_code="G/504/2011")
+
+    assert full.found is True
+    assert full.name == "PRIYA SHARMA"
+    # The thin view returns exactly the cases, court_name backfill included.
+    assert [c.to_dict() for c in cases] == [c.to_dict() for c in full.cases]
+    assert cases[0].court_name == gujarat.name
+
+
 def test_advocate_cause_list_form():
     form = endpoints.advocate_cause_list_form(
         state_code="17", captcha="abc123", bar_code="G/504/2011", causelist_date="17-08-2026"
